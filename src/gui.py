@@ -1,7 +1,9 @@
 import json
 import threading
 import tkinter as tk
+from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import customtkinter as ctk
 import pandas as pd
 from src.ingestion.api_client import OddsAPIClient
@@ -540,7 +542,7 @@ class GamblerBotGUI(ctk.CTk):
         def toggle_details():
             state["expanded"] = not state["expanded"]
             if state["expanded"]:
-                details.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
+                details.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 10))
                 arrow_button.configure(text=f"▼  {home} vs {away}")
             else:
                 details.grid_remove()
@@ -558,8 +560,25 @@ class GamblerBotGUI(ctk.CTk):
         )
         arrow_button.grid(row=0, column=0, sticky="ew", padx=8, pady=(7, 3))
 
+        first_row = game_df.iloc[0]
+        kickoff = self.format_jerusalem_time(first_row.get('commence_time'))
+        country = self.metadata_value(first_row.get('country'))
+        stadium = self.metadata_value(first_row.get('stadium'))
+        metadata = ctk.CTkLabel(
+            card,
+            text=(
+                f"Jerusalem time: {kickoff}\n"
+                f"Country: {country}   •   Stadium: {stadium}"
+            ),
+            anchor="w",
+            justify="left",
+            text_color=("gray35", "gray70"),
+            font=ctk.CTkFont(size=11),
+        )
+        metadata.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 5))
+
         summary = ctk.CTkFrame(card, fg_color="transparent")
-        summary.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 9))
+        summary.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 9))
         summary.grid_columnconfigure(1, weight=1)
         summary.grid_columnconfigure(2, weight=1)
 
@@ -592,6 +611,25 @@ class GamblerBotGUI(ctk.CTk):
             ).grid(row=selection_row, column=2, sticky="w", padx=6, pady=2)
 
         self.populate_bookmaker_details(details, home, away, game_df)
+
+    @staticmethod
+    def metadata_value(value):
+        """Return a readable venue value without exposing pandas NaN values."""
+        return str(value) if pd.notna(value) and str(value).strip() else "Not provided by odds API"
+
+    @staticmethod
+    def format_jerusalem_time(value):
+        """Convert an ISO-8601 API kickoff timestamp to Jerusalem local time."""
+        if pd.isna(value) or not str(value).strip():
+            return "Time not provided"
+        try:
+            parsed = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            jerusalem = parsed.astimezone(ZoneInfo("Asia/Jerusalem"))
+            return jerusalem.strftime("%a, %d %b %Y at %H:%M")
+        except (ValueError, TypeError, ZoneInfoNotFoundError):
+            return "Invalid kickoff time"
 
     def populate_bookmaker_details(self, details, home, away, game_df):
         """Build the full odds table hidden beneath an expandable game card."""

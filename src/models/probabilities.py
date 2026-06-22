@@ -9,6 +9,23 @@ class MarketAnalyzer:
         home_team = raw_event_data.get('home_team')
         away_team = raw_event_data.get('away_team')
         event_id = raw_event_data.get('id')
+        commence_time = raw_event_data.get('commence_time')
+
+        # The Odds API normally supplies kickoff time but not venue metadata.
+        # These fallbacks also support enriched feeds without changing the UI.
+        venue = raw_event_data.get('venue') or {}
+        if not isinstance(venue, dict):
+            venue = {'name': str(venue)}
+        stadium = (
+            raw_event_data.get('stadium')
+            or raw_event_data.get('venue_name')
+            or venue.get('name')
+        )
+        country = (
+            raw_event_data.get('country')
+            or raw_event_data.get('sport_country')
+            or venue.get('country')
+        )
         
         for bookmaker in raw_event_data.get('bookmakers', []):
             bookie_name = bookmaker.get('title')
@@ -44,6 +61,9 @@ class MarketAnalyzer:
                             'event_id': event_id,
                             'home_team': home_team,
                             'away_team': away_team,
+                            'commence_time': commence_time,
+                            'country': country,
+                            'stadium': stadium,
                             'bookmaker': bookie_name,
                             'home_odds': home_odds,
                             'away_odds': away_odds,
