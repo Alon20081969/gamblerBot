@@ -50,6 +50,8 @@ class GamblerBotGUI(ctk.CTk):
         self.is_closing = False
         self.results_generation = 0
         self.search_after_id = None
+        self.result_search_after_id = None
+        self.latest_results_df = None
 
         self.competition_catalog = {
             sport: {name: config.copy() for name, config in competitions.items()}
@@ -148,12 +150,23 @@ class GamblerBotGUI(ctk.CTk):
 
         self.results_tab.grid_rowconfigure(1, weight=1)
         self.results_tab.grid_columnconfigure(0, weight=1)
+        self.results_header = ctk.CTkFrame(self.results_tab, fg_color="transparent")
+        self.results_header.grid(row=0, column=0, sticky="ew", padx=8, pady=(6, 8))
+
         self.results_title = ctk.CTkLabel(
-            self.results_tab,
+            self.results_header,
             text="Game odds overview",
             font=ctk.CTkFont(size=14, weight="bold"),
         )
-        self.results_title.grid(row=0, column=0, sticky="w", padx=8, pady=(6, 8))
+        self.results_title.pack(side="left")
+
+        self.result_search_entry = ctk.CTkEntry(
+            self.results_header,
+            placeholder_text="Search home or away team...",
+            width=230,
+        )
+        self.result_search_entry.pack(side="right")
+        self.result_search_entry.bind("<KeyRelease>", self.filter_result_teams)
 
         self.game_results = ctk.CTkScrollableFrame(
             self.results_tab,
@@ -613,6 +626,9 @@ class GamblerBotGUI(ctk.CTk):
     def show_results_message(self, message):
         """Clear the result list and show a single status message."""
         self.results_generation += 1
+        self.latest_results_df = None
+        if hasattr(self, "result_search_entry"):
+            self.result_search_entry.delete(0, tk.END)
         for widget in self.game_results.winfo_children():
             widget.destroy()
         label = ctk.CTkLabel(
@@ -624,7 +640,41 @@ class GamblerBotGUI(ctk.CTk):
         label.grid(row=0, column=0, sticky="ew", padx=20, pady=30)
 
     def display_game_results(self, df):
-        """Display game cards in batches so Tk stays responsive."""
+        """Store a fresh scan and display all its game cards."""
+        self.latest_results_df = df.copy()
+        if self.result_search_after_id is not None:
+            self.after_cancel(self.result_search_after_id)
+            self.result_search_after_id = None
+        self.result_search_entry.delete(0, tk.END)
+        self.render_filtered_game_results()
+
+    def filter_result_teams(self, _event=None):
+        """Debounce team filtering while the user types."""
+        if self.result_search_after_id is not None:
+            self.after_cancel(self.result_search_after_id)
+        self.result_search_after_id = self.after(160, self.apply_result_team_filter)
+
+    def apply_result_team_filter(self):
+        self.result_search_after_id = None
+        self.render_filtered_game_results()
+
+    def render_filtered_game_results(self):
+        """Filter the latest scan by home or away team and render matches."""
+        if self.latest_results_df is None:
+            return
+
+        query = self.result_search_entry.get().strip()
+        if query:
+            home_matches = self.latest_results_df['home_team'].astype(str).str.contains(
+                query, case=False, regex=False, na=False
+            )
+            away_matches = self.latest_results_df['away_team'].astype(str).str.contains(
+                query, case=False, regex=False, na=False
+            )
+            filtered_df = self.latest_results_df[home_matches | away_matches]
+        else:
+            filtered_df = self.latest_results_df
+
         self.results_generation += 1
         generation = self.results_generation
         for widget in self.game_results.winfo_children():
@@ -632,12 +682,20 @@ class GamblerBotGUI(ctk.CTk):
         self.odds_buttons = {}
 
         self.view_tabs.set("Results")
-        grouped = df.groupby(
+        grouped = filtered_df.groupby(
             ['event_id', 'home_team', 'away_team'],
             dropna=False,
             sort=False,
         )
         games = list(grouped)
+        if not games:
+            self.results_title.configure(text="Team search  •  0 games")
+            ctk.CTkLabel(
+                self.game_results,
+                text=f'No teams found for "{query}".',
+                text_color=("gray40", "gray65"),
+            ).grid(row=0, column=0, sticky="ew", padx=20, pady=30)
+            return
         self.results_title.configure(text=f"Loading games...  0/{len(games)}")
         self.render_game_batch(games, 0, generation)
 
