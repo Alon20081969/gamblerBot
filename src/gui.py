@@ -123,7 +123,30 @@ class GamblerBotGUI(ctk.CTk):
         self.log_frame = ctk.CTkFrame(self.content_frame)
         self.log_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
 
-        self.log_header = ctk.CTkFrame(self.log_frame, fg_color="transparent")
+        self.view_tabs = ctk.CTkTabview(self.log_frame)
+        self.view_tabs.pack(fill="both", expand=True, padx=8, pady=8)
+        self.results_tab = self.view_tabs.add("Results")
+        self.console_tab = self.view_tabs.add("Console")
+        self.view_tabs.set("Results")
+
+        self.results_tab.grid_rowconfigure(1, weight=1)
+        self.results_tab.grid_columnconfigure(0, weight=1)
+        self.results_title = ctk.CTkLabel(
+            self.results_tab,
+            text="Game odds overview",
+            font=ctk.CTkFont(size=14, weight="bold"),
+        )
+        self.results_title.grid(row=0, column=0, sticky="w", padx=8, pady=(6, 8))
+
+        self.game_results = ctk.CTkScrollableFrame(
+            self.results_tab,
+            fg_color=("gray90", "gray14"),
+        )
+        self.game_results.grid(row=1, column=0, sticky="nsew", padx=4, pady=(0, 4))
+        self.game_results.grid_columnconfigure(0, weight=1)
+        self.show_results_message("Scan a competition to see its games here.")
+
+        self.log_header = ctk.CTkFrame(self.console_tab, fg_color="transparent")
         self.log_header.pack(fill="x", padx=15, pady=(10, 5))
 
         self.log_label = ctk.CTkLabel(
@@ -145,7 +168,7 @@ class GamblerBotGUI(ctk.CTk):
         self.clear_button.pack(side="right")
 
         self.terminal_box = ctk.CTkTextbox(
-            self.log_frame, 
+            self.console_tab,
             font=("Consolas", 12), 
             state="disabled", 
             wrap="word"
@@ -347,6 +370,7 @@ class GamblerBotGUI(ctk.CTk):
         if not sport_config:
             self.write_to_terminal("[-] Choose a valid competition before scanning.")
             return
+        self.show_results_message(f"Scanning {selected_competition}...")
         self.scan_button.configure(state="disabled", text="Scanning...")
         threading.Thread(
             target=self.run_market_scan_pipeline,
@@ -370,6 +394,9 @@ class GamblerBotGUI(ctk.CTk):
             
             if not raw_events:
                 self.write_to_terminal("[-] API returned 0 upcoming matches or league is off-season.")
+                self.after(0, lambda: self.show_results_message(
+                    "No upcoming games were returned. This competition may be off-season."
+                ))
                 return
 
             self.write_to_terminal(f"[+] Ingested {len(raw_events)} active game objects. Evaluating lines...")
@@ -383,9 +410,12 @@ class GamblerBotGUI(ctk.CTk):
             if all_market_dfs:
                 master_df = pd.concat(all_market_dfs, ignore_index=True)
                 self.write_to_terminal(f"[+] Operational data matrix compiled ({len(master_df)} rows parsed).")
-                self.evaluate_gui_discrepancies(master_df)
+                self.after(0, lambda data=master_df.copy(): self.display_game_results(data))
             else:
                 self.write_to_terminal("[-] Parsing failure: Could not construct structured arrays.")
+                self.after(0, lambda: self.show_results_message(
+                    "Games were returned, but their odds could not be displayed."
+                ))
 
         except Exception as e:
             self.write_to_terminal(f"[!] Critical structural failure: {str(e)}")
@@ -393,83 +423,126 @@ class GamblerBotGUI(ctk.CTk):
             self.after(0, self.refresh_quota_display)
             self.after(0, lambda: self.scan_button.configure(state="normal", text="Scan Market"))
 
-    def evaluate_gui_discrepancies(self, df):
-        """Processes flattened datasets inside class scope, utilizing Implied Probability Edges."""
-        self.write_to_terminal("\n=== SCAN RESULTS ===")
-        self.write_to_terminal(
-            "How to read these results:\n"
-            "  Typical market odds = the middle price across all bookmakers.\n"
-            "  Price advantage = how much better this offer looks than that typical price.\n"
-            "  This is a market comparison, not a guarantee that the bet will win.\n"
+    def show_results_message(self, message):
+        """Clear the result list and show a single status message."""
+        for widget in self.game_results.winfo_children():
+            widget.destroy()
+        label = ctk.CTkLabel(
+            self.game_results,
+            text=message,
+            text_color=("gray40", "gray65"),
+            wraplength=500,
         )
-        found_any = False
-        
-        # Define the minimum theoretical edge we care about (e.g., 2% absolute probability edge)
-        MIN_PROBABILITY_EDGE = 0.02 
-        
-        for (home, away), game_df in df.groupby(['home_team', 'away_team']):
-            median_home = game_df['home_odds'].median()
-            median_away = game_df['away_odds'].median()
-            
-            # Convert market consensus medians to baseline probabilities
-            prob_market_home = 1 / median_home
-            prob_market_away = 1 / median_away
-            
-            has_draws = 'draw_odds' in game_df.columns and not game_df['draw_odds'].isna().all()
-            median_draw = game_df['draw_odds'].median() if has_draws else None
-            prob_market_draw = (1 / median_draw) if has_draws else None
-            
-            for _, row in game_df.iterrows():
-                # 1. Evaluate Home Team Probability Edge
-                prob_bookie_home = 1 / row['home_odds']
-                edge_home = prob_market_home - prob_bookie_home
-                if edge_home >= MIN_PROBABILITY_EDGE:
-                    self.write_value_result(
-                        home, away, row['home_team'], row['bookmaker'],
-                        row['home_odds'], median_home, edge_home,
-                    )
-                    found_any = True
-                    
-                # 2. Evaluate Away Team Probability Edge
-                prob_bookie_away = 1 / row['away_odds']
-                edge_away = prob_market_away - prob_bookie_away
-                if edge_away >= MIN_PROBABILITY_EDGE:
-                    self.write_value_result(
-                        home, away, row['away_team'], row['bookmaker'],
-                        row['away_odds'], median_away, edge_away,
-                    )
-                    found_any = True
-                    
-                # 3. Evaluate Draw Probability Edge
-                if has_draws and pd.notna(row['draw_odds']) and row['draw_odds'] > 0:
-                    prob_bookie_draw = 1 / row['draw_odds']
-                    edge_draw = prob_market_draw - prob_bookie_draw
-                    if edge_draw >= MIN_PROBABILITY_EDGE:
-                        self.write_value_result(
-                            home, away, "Draw", row['bookmaker'],
-                            row['draw_odds'], median_draw, edge_draw,
-                        )
-                        found_any = True
-                        
-        if not found_any:
-            self.write_to_terminal(
-                "[+] No offers were at least 2 percentage points better than the typical market price."
-            )
+        label.grid(row=0, column=0, sticky="ew", padx=20, pady=30)
 
-    def write_value_result(self, home, away, selection, bookmaker, offered_odds,
-                           typical_odds, advantage):
-        """Write one value result using beginner-friendly labels."""
-        self.write_to_terminal(
-            "----------------------------------------\n"
-            "VALUE OPPORTUNITY FOUND\n"
-            f"Match: {home} vs {away}\n"
-            f"Your selection: {selection}\n"
-            f"Bookmaker: {bookmaker}\n"
-            f"Odds offered: {offered_odds:.2f}\n"
-            f"Typical market odds: {typical_odds:.2f}\n"
-            f"Price advantage: +{advantage * 100:.1f} percentage points\n"
-            "Why it was flagged: this bookmaker is offering a better price than most of the market.\n"
+    def display_game_results(self, df):
+        """Display one collapsed summary card per game."""
+        for widget in self.game_results.winfo_children():
+            widget.destroy()
+
+        self.view_tabs.set("Results")
+        grouped = df.groupby(
+            ['event_id', 'home_team', 'away_team'],
+            dropna=False,
+            sort=False,
         )
+        for row, ((_, home, away), game_df) in enumerate(grouped):
+            self.create_game_card(row, home, away, game_df)
+
+        self.results_title.configure(text=f"Game odds overview  •  {grouped.ngroups} games")
+
+    def create_game_card(self, row, home, away, game_df):
+        """Create a best/worst summary that expands into all bookmaker odds."""
+        card = ctk.CTkFrame(self.game_results, corner_radius=9)
+        card.grid(row=row, column=0, sticky="ew", padx=4, pady=5)
+        card.grid_columnconfigure(0, weight=1)
+
+        details = ctk.CTkFrame(card, fg_color=("gray87", "gray18"))
+        state = {"expanded": False}
+
+        def toggle_details():
+            state["expanded"] = not state["expanded"]
+            if state["expanded"]:
+                details.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
+                arrow_button.configure(text=f"▼  {home} vs {away}")
+            else:
+                details.grid_remove()
+                arrow_button.configure(text=f"▶  {home} vs {away}")
+
+        arrow_button = ctk.CTkButton(
+            card,
+            text=f"▶  {home} vs {away}",
+            command=toggle_details,
+            anchor="w",
+            fg_color="transparent",
+            hover_color=("gray78", "gray25"),
+            text_color=("gray10", "gray95"),
+            font=ctk.CTkFont(size=14, weight="bold"),
+        )
+        arrow_button.grid(row=0, column=0, sticky="ew", padx=8, pady=(7, 3))
+
+        summary = ctk.CTkFrame(card, fg_color="transparent")
+        summary.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 9))
+        summary.grid_columnconfigure(1, weight=1)
+        summary.grid_columnconfigure(2, weight=1)
+
+        selections = [(home, 'home_odds')]
+        if 'draw_odds' in game_df and game_df['draw_odds'].notna().any():
+            selections.append(("Draw", 'draw_odds'))
+        selections.append((away, 'away_odds'))
+
+        for selection_row, (selection, column) in enumerate(selections):
+            valid = game_df.dropna(subset=[column])
+            if valid.empty:
+                continue
+            highest = valid.loc[valid[column].idxmax()]
+            lowest = valid.loc[valid[column].idxmin()]
+            ctk.CTkLabel(
+                summary, text=selection, anchor="w",
+                font=ctk.CTkFont(size=12, weight="bold"),
+            ).grid(row=selection_row, column=0, sticky="w", padx=(0, 12), pady=2)
+            ctk.CTkLabel(
+                summary,
+                text=f"Highest: {highest[column]:.2f}  ({highest['bookmaker']})",
+                anchor="w",
+                text_color=("#147a3d", "#62d48b"),
+            ).grid(row=selection_row, column=1, sticky="w", padx=6, pady=2)
+            ctk.CTkLabel(
+                summary,
+                text=f"Lowest: {lowest[column]:.2f}  ({lowest['bookmaker']})",
+                anchor="w",
+                text_color=("#a13a3a", "#ef8585"),
+            ).grid(row=selection_row, column=2, sticky="w", padx=6, pady=2)
+
+        self.populate_bookmaker_details(details, home, away, game_df)
+
+    def populate_bookmaker_details(self, details, home, away, game_df):
+        """Build the full odds table hidden beneath an expandable game card."""
+        has_draw = 'draw_odds' in game_df and game_df['draw_odds'].notna().any()
+        columns = [("Bookmaker", None), (home, 'home_odds')]
+        if has_draw:
+            columns.append(("Draw", 'draw_odds'))
+        columns.append((away, 'away_odds'))
+
+        for column_index, (heading, _) in enumerate(columns):
+            details.grid_columnconfigure(column_index, weight=1)
+            ctk.CTkLabel(
+                details,
+                text=heading,
+                font=ctk.CTkFont(size=11, weight="bold"),
+            ).grid(row=0, column=column_index, sticky="ew", padx=7, pady=(7, 4))
+
+        bookmaker_rows = game_df.drop_duplicates(subset=['bookmaker']).sort_values('bookmaker')
+        for table_row, (_, odds_row) in enumerate(bookmaker_rows.iterrows(), start=1):
+            for column_index, (_, odds_column) in enumerate(columns):
+                if odds_column is None:
+                    value = str(odds_row['bookmaker'])
+                else:
+                    odds = odds_row[odds_column]
+                    value = f"{odds:.2f}" if pd.notna(odds) else "—"
+                ctk.CTkLabel(details, text=value).grid(
+                    row=table_row, column=column_index, sticky="ew", padx=7, pady=3
+                )
 
 if __name__ == "__main__":
     app = GamblerBotGUI()
