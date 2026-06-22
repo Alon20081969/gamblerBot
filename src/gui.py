@@ -1,4 +1,5 @@
 import json
+import queue
 import threading
 import tkinter as tk
 from datetime import datetime, timezone
@@ -43,6 +44,12 @@ class GamblerBotGUI(ctk.CTk):
 
         self.client = OddsAPIClient()
         self.favorite_competition_keys = self.load_favorites()
+        self.selected_bets = {}
+        self.odds_buttons = {}
+        self.ui_queue = queue.Queue()
+        self.is_closing = False
+        self.results_generation = 0
+        self.search_after_id = None
 
         self.competition_catalog = {
             sport: {name: config.copy() for name, config in competitions.items()}
@@ -50,6 +57,8 @@ class GamblerBotGUI(ctk.CTk):
         }
 
         self.create_widgets()
+        self.protocol("WM_DELETE_WINDOW", self.close_application)
+        self.after(50, self.process_ui_queue)
         self.refresh_competition_catalog()
 
     def create_widgets(self):
@@ -133,6 +142,7 @@ class GamblerBotGUI(ctk.CTk):
         self.view_tabs = ctk.CTkTabview(self.log_frame)
         self.view_tabs.pack(fill="both", expand=True, padx=8, pady=8)
         self.results_tab = self.view_tabs.add("Results")
+        self.gamble_tab = self.view_tabs.add("Gamble")
         self.console_tab = self.view_tabs.add("Console")
         self.view_tabs.set("Results")
 
@@ -152,6 +162,59 @@ class GamblerBotGUI(ctk.CTk):
         self.game_results.grid(row=1, column=0, sticky="nsew", padx=4, pady=(0, 4))
         self.game_results.grid_columnconfigure(0, weight=1)
         self.show_results_message("Scan a competition to see its games here.")
+
+        # --- Gamble / Bet Slip Tab ---
+        self.gamble_tab.grid_rowconfigure(1, weight=1)
+        self.gamble_tab.grid_columnconfigure(0, weight=1)
+        slip_header = ctk.CTkFrame(self.gamble_tab, fg_color="transparent")
+        slip_header.grid(row=0, column=0, sticky="ew", padx=8, pady=(6, 8))
+        self.slip_title = ctk.CTkLabel(
+            slip_header,
+            text="Gamble slip",
+            font=ctk.CTkFont(size=14, weight="bold"),
+        )
+        self.slip_title.pack(side="left")
+        self.clear_slip_button = ctk.CTkButton(
+            slip_header,
+            text="Clear slip",
+            command=self.clear_bet_slip,
+            width=80,
+            height=28,
+            fg_color=("gray70", "gray28"),
+            hover_color=("gray60", "gray35"),
+        )
+        self.clear_slip_button.pack(side="right")
+
+        self.bet_slip_results = ctk.CTkScrollableFrame(
+            self.gamble_tab,
+            fg_color=("gray90", "gray14"),
+        )
+        self.bet_slip_results.grid(row=1, column=0, sticky="nsew", padx=4, pady=(0, 8))
+        self.bet_slip_results.grid_columnconfigure(0, weight=1)
+
+        totals = ctk.CTkFrame(self.gamble_tab)
+        totals.grid(row=2, column=0, sticky="ew", padx=4, pady=(0, 4))
+        totals.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(totals, text="Stake amount:").grid(
+            row=0, column=0, sticky="w", padx=12, pady=(10, 5)
+        )
+        self.stake_entry = ctk.CTkEntry(totals, placeholder_text="0.00")
+        self.stake_entry.grid(row=0, column=1, sticky="ew", padx=(5, 12), pady=(10, 5))
+        self.stake_entry.bind("<KeyRelease>", lambda _event: self.update_bet_totals())
+
+        self.combined_odds_label = ctk.CTkLabel(totals, text="Combined odds: —", anchor="w")
+        self.combined_odds_label.grid(row=1, column=0, columnspan=2, sticky="ew", padx=12, pady=2)
+        self.return_label = ctk.CTkLabel(totals, text="Potential return: 0.00", anchor="w")
+        self.return_label.grid(row=2, column=0, columnspan=2, sticky="ew", padx=12, pady=2)
+        self.profit_label = ctk.CTkLabel(totals, text="Estimated profit: 0.00", anchor="w")
+        self.profit_label.grid(row=3, column=0, columnspan=2, sticky="ew", padx=12, pady=2)
+        ctk.CTkLabel(
+            totals,
+            text="Estimates use decimal odds. This does not place a real bet.",
+            text_color=("gray45", "gray65"),
+            font=ctk.CTkFont(size=10),
+        ).grid(row=4, column=0, columnspan=2, sticky="w", padx=12, pady=(3, 10))
+        self.render_bet_slip()
 
         self.log_header = ctk.CTkFrame(self.console_tab, fg_color="transparent")
         self.log_header.pack(fill="x", padx=15, pady=(10, 5))
@@ -239,10 +302,20 @@ class GamblerBotGUI(ctk.CTk):
         self.competition_dropdown.configure(values=competitions)
         self.competition_dropdown.set(competitions[0] if competitions else "No competitions available")
         if hasattr(self, "competition_search"):
+            if self.search_after_id is not None:
+                self.after_cancel(self.search_after_id)
+                self.search_after_id = None
             self.competition_search.delete(0, tk.END)
             self.populate_competition_browser()
 
     def filter_competitions(self, _event=None):
+        """Debounce typing so the competition list is not rebuilt per keystroke."""
+        if self.search_after_id is not None:
+            self.after_cancel(self.search_after_id)
+        self.search_after_id = self.after(160, self.apply_competition_filter)
+
+    def apply_competition_filter(self):
+        self.search_after_id = None
         self.populate_competition_browser(self.competition_search.get())
 
     def populate_competition_browser(self, query=""):
@@ -358,15 +431,44 @@ class GamblerBotGUI(ctk.CTk):
         except OSError as exc:
             self.write_to_terminal(f"[!] Could not save favorites: {exc}")
 
+    def post_to_ui(self, callback, *args, **kwargs):
+        """Queue a widget operation for execution by Tk's main thread."""
+        if not self.is_closing:
+            self.ui_queue.put((callback, args, kwargs))
+
+    def process_ui_queue(self):
+        """Drain background-thread messages without letting workers touch Tk."""
+        if self.is_closing:
+            return
+
+        for _ in range(100):
+            try:
+                callback, args, kwargs = self.ui_queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                callback(*args, **kwargs)
+            except Exception as exc:
+                if not self.is_closing:
+                    print(f"[!] UI update failed safely ({type(exc).__name__}): {exc}")
+
+        if not self.is_closing:
+            self.after(50, self.process_ui_queue)
+
+    def close_application(self):
+        """Stop accepting worker updates before destroying Tk widgets."""
+        self.is_closing = True
+        self.destroy()
+
     def refresh_competition_catalog(self):
         """Load every competition exposed by the odds provider without freezing the UI."""
         threading.Thread(target=self._load_competition_catalog, daemon=True).start()
 
     def _load_competition_catalog(self):
         sports = self.client.get_available_sports(include_inactive=True)
-        self.after(0, self.refresh_quota_display)
+        self.post_to_ui(self.refresh_quota_display)
         if not sports:
-            self.after(0, self._show_fallback_catalog_status)
+            self.post_to_ui(self._show_fallback_catalog_status)
             return
 
         # Merge the server response into the fallback so marquee competitions
@@ -389,9 +491,9 @@ class GamblerBotGUI(ctk.CTk):
             }
 
         if catalog:
-            self.after(0, lambda: self._apply_competition_catalog(catalog))
+            self.post_to_ui(self._apply_competition_catalog, catalog)
         else:
-            self.after(0, self._show_fallback_catalog_status)
+            self.post_to_ui(self._show_fallback_catalog_status)
 
     def _apply_competition_catalog(self, catalog):
         self.competition_catalog = catalog
@@ -428,7 +530,7 @@ class GamblerBotGUI(ctk.CTk):
     def write_to_terminal(self, text):
         """Thread-safe injection of text to terminal box interface."""
         if threading.current_thread() is not threading.main_thread():
-            self.after(0, lambda: self.write_to_terminal(text))
+            self.post_to_ui(self.write_to_terminal, text)
             return
         self.terminal_box.configure(state="normal")
         self.terminal_box.insert(tk.END, text + "\n")
@@ -473,9 +575,10 @@ class GamblerBotGUI(ctk.CTk):
             
             if not raw_events:
                 self.write_to_terminal("[-] API returned 0 upcoming matches or league is off-season.")
-                self.after(0, lambda: self.show_results_message(
-                    "No upcoming games were returned. This competition may be off-season."
-                ))
+                self.post_to_ui(
+                    self.show_results_message,
+                    "No upcoming games were returned. This competition may be off-season.",
+                )
                 return
 
             self.write_to_terminal(f"[+] Ingested {len(raw_events)} active game objects. Evaluating lines...")
@@ -489,21 +592,27 @@ class GamblerBotGUI(ctk.CTk):
             if all_market_dfs:
                 master_df = pd.concat(all_market_dfs, ignore_index=True)
                 self.write_to_terminal(f"[+] Operational data matrix compiled ({len(master_df)} rows parsed).")
-                self.after(0, lambda data=master_df.copy(): self.display_game_results(data))
+                self.post_to_ui(self.display_game_results, master_df.copy())
             else:
                 self.write_to_terminal("[-] Parsing failure: Could not construct structured arrays.")
-                self.after(0, lambda: self.show_results_message(
-                    "Games were returned, but their odds could not be displayed."
-                ))
+                self.post_to_ui(
+                    self.show_results_message,
+                    "Games were returned, but their odds could not be displayed.",
+                )
 
         except Exception as e:
             self.write_to_terminal(f"[!] Critical structural failure: {str(e)}")
         finally:
-            self.after(0, self.refresh_quota_display)
-            self.after(0, lambda: self.scan_button.configure(state="normal", text="Scan Market"))
+            self.post_to_ui(self.refresh_quota_display)
+            self.post_to_ui(
+                self.scan_button.configure,
+                state="normal",
+                text="Scan Market",
+            )
 
     def show_results_message(self, message):
         """Clear the result list and show a single status message."""
+        self.results_generation += 1
         for widget in self.game_results.winfo_children():
             widget.destroy()
         label = ctk.CTkLabel(
@@ -515,9 +624,12 @@ class GamblerBotGUI(ctk.CTk):
         label.grid(row=0, column=0, sticky="ew", padx=20, pady=30)
 
     def display_game_results(self, df):
-        """Display one collapsed summary card per game."""
+        """Display game cards in batches so Tk stays responsive."""
+        self.results_generation += 1
+        generation = self.results_generation
         for widget in self.game_results.winfo_children():
             widget.destroy()
+        self.odds_buttons = {}
 
         self.view_tabs.set("Results")
         grouped = df.groupby(
@@ -525,23 +637,42 @@ class GamblerBotGUI(ctk.CTk):
             dropna=False,
             sort=False,
         )
-        for row, ((_, home, away), game_df) in enumerate(grouped):
-            self.create_game_card(row, home, away, game_df)
+        games = list(grouped)
+        self.results_title.configure(text=f"Loading games...  0/{len(games)}")
+        self.render_game_batch(games, 0, generation)
 
-        self.results_title.configure(text=f"Game odds overview  •  {grouped.ngroups} games")
+    def render_game_batch(self, games, start, generation):
+        """Build a few cards, then yield control back to Tk's event loop."""
+        if self.is_closing or generation != self.results_generation:
+            return
 
-    def create_game_card(self, row, home, away, game_df):
+        end = min(start + 6, len(games))
+        for row in range(start, end):
+            (event_id, home, away), game_df = games[row]
+            event_key = str(event_id) if pd.notna(event_id) else f"{home}|{away}"
+            self.create_game_card(row, event_key, home, away, game_df)
+
+        if end < len(games):
+            self.results_title.configure(text=f"Loading games...  {end}/{len(games)}")
+            self.after(1, self.render_game_batch, games, end, generation)
+        else:
+            self.results_title.configure(text=f"Game odds overview  •  {len(games)} games")
+
+    def create_game_card(self, row, event_key, home, away, game_df):
         """Create a best/worst summary that expands into all bookmaker odds."""
         card = ctk.CTkFrame(self.game_results, corner_radius=9)
         card.grid(row=row, column=0, sticky="ew", padx=4, pady=5)
         card.grid_columnconfigure(0, weight=1)
 
         details = ctk.CTkFrame(card, fg_color=("gray87", "gray18"))
-        state = {"expanded": False}
+        state = {"expanded": False, "loaded": False}
 
         def toggle_details():
             state["expanded"] = not state["expanded"]
             if state["expanded"]:
+                if not state["loaded"]:
+                    self.populate_bookmaker_details(details, event_key, home, away, game_df)
+                    state["loaded"] = True
                 details.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 10))
                 arrow_button.configure(text=f"▼  {home} vs {away}")
             else:
@@ -583,12 +714,12 @@ class GamblerBotGUI(ctk.CTk):
         summary.grid_columnconfigure(1, weight=1)
         summary.grid_columnconfigure(2, weight=1)
 
-        selections = [(f"Home — {home}", 'home_odds')]
+        selections = [(f"Home — {home}", 'home_odds', home)]
         if 'draw_odds' in game_df and game_df['draw_odds'].notna().any():
-            selections.append(("Draw", 'draw_odds'))
-        selections.append((f"Away — {away}", 'away_odds'))
+            selections.append(("Draw", 'draw_odds', "Draw"))
+        selections.append((f"Away — {away}", 'away_odds', away))
 
-        for selection_row, (selection, column) in enumerate(selections):
+        for selection_row, (selection, column, pick_name) in enumerate(selections):
             valid = game_df.dropna(subset=[column])
             if valid.empty:
                 continue
@@ -598,20 +729,28 @@ class GamblerBotGUI(ctk.CTk):
                 summary, text=selection, anchor="w",
                 font=ctk.CTkFont(size=12, weight="bold"),
             ).grid(row=selection_row, column=0, sticky="w", padx=(0, 12), pady=2)
-            ctk.CTkLabel(
+            highest_button = self.create_selectable_odd(
                 summary,
                 text=f"Highest: {highest[column]:.2f}  ({highest['bookmaker']})",
-                anchor="w",
-                text_color=("#147a3d", "#62d48b"),
-            ).grid(row=selection_row, column=1, sticky="w", padx=6, pady=2)
-            ctk.CTkLabel(
+                event_key=event_key,
+                match=f"{home} vs {away}",
+                selection=pick_name,
+                bookmaker=str(highest['bookmaker']),
+                odds=float(highest[column]),
+                odds_column=column,
+            )
+            highest_button.grid(row=selection_row, column=1, sticky="ew", padx=6, pady=2)
+            lowest_button = self.create_selectable_odd(
                 summary,
                 text=f"Lowest: {lowest[column]:.2f}  ({lowest['bookmaker']})",
-                anchor="w",
-                text_color=("#a13a3a", "#ef8585"),
-            ).grid(row=selection_row, column=2, sticky="w", padx=6, pady=2)
-
-        self.populate_bookmaker_details(details, home, away, game_df)
+                event_key=event_key,
+                match=f"{home} vs {away}",
+                selection=pick_name,
+                bookmaker=str(lowest['bookmaker']),
+                odds=float(lowest[column]),
+                odds_column=column,
+            )
+            lowest_button.grid(row=selection_row, column=2, sticky="ew", padx=6, pady=2)
 
     @staticmethod
     def metadata_value(value):
@@ -637,7 +776,156 @@ class GamblerBotGUI(ctk.CTk):
         except (ValueError, TypeError, ZoneInfoNotFoundError):
             return "Invalid kickoff time"
 
-    def populate_bookmaker_details(self, details, home, away, game_df):
+    def create_selectable_odd(self, parent, text, event_key, match, selection,
+                              bookmaker, odds, odds_column):
+        """Create an odds button with hover glow and bet-slip toggle behavior."""
+        identity = (event_key, bookmaker, odds_column)
+        button = ctk.CTkButton(
+            parent,
+            text=text,
+            anchor="center",
+            height=28,
+            border_width=1,
+            corner_radius=6,
+            fg_color="transparent",
+            hover_color="#287fd1",
+            border_color=("gray65", "gray35"),
+            text_color=("gray10", "gray92"),
+            command=lambda: self.toggle_bet(
+                identity, event_key, match, selection, bookmaker, odds
+            ),
+        )
+        self.odds_buttons.setdefault(identity, []).append((button, text))
+        self.update_odds_button_style(identity)
+        return button
+
+    def toggle_bet(self, identity, event_key, match, selection, bookmaker, odds):
+        """Select, replace, or remove one accumulator pick for a game."""
+        current = self.selected_bets.get(event_key)
+        if current and current["identity"] == identity:
+            del self.selected_bets[event_key]
+        else:
+            self.selected_bets[event_key] = {
+                "identity": identity,
+                "match": match,
+                "selection": selection,
+                "bookmaker": bookmaker,
+                "odds": odds,
+            }
+
+        self.update_odds_button_styles(event_key)
+        self.render_bet_slip()
+
+    def update_odds_button_style(self, identity):
+        selected = any(
+            bet["identity"] == identity for bet in self.selected_bets.values()
+        )
+        for button, base_text in self.odds_buttons.get(identity, []):
+            try:
+                exists = button.winfo_exists()
+            except tk.TclError:
+                continue
+            if not exists:
+                continue
+            try:
+                button.configure(
+                    text=f"✓  {base_text}" if selected else base_text,
+                    fg_color="#1769aa" if selected else "transparent",
+                    hover_color="#3b9cff" if selected else "#287fd1",
+                    border_color="#77c4ff" if selected else ("gray65", "gray35"),
+                    border_width=2 if selected else 1,
+                    text_color="white" if selected else ("gray10", "gray92"),
+                )
+            except tk.TclError:
+                continue
+
+    def update_odds_button_styles(self, event_key=None):
+        for identity in self.odds_buttons:
+            if event_key is None or identity[0] == event_key:
+                self.update_odds_button_style(identity)
+
+    def render_bet_slip(self):
+        """Redraw the selected picks and refresh accumulator totals."""
+        for widget in self.bet_slip_results.winfo_children():
+            widget.destroy()
+
+        count = len(self.selected_bets)
+        self.slip_title.configure(text=f"Gamble slip  •  {count} selection{'s' if count != 1 else ''}")
+        if not self.selected_bets:
+            ctk.CTkLabel(
+                self.bet_slip_results,
+                text="Click any odds button to add a selection.",
+                text_color=("gray40", "gray65"),
+            ).grid(row=0, column=0, sticky="ew", padx=20, pady=30)
+            self.update_bet_totals()
+            return
+
+        for row, (event_key, bet) in enumerate(self.selected_bets.items()):
+            bet_card = ctk.CTkFrame(self.bet_slip_results, corner_radius=8)
+            bet_card.grid(row=row, column=0, sticky="ew", padx=4, pady=4)
+            bet_card.grid_columnconfigure(0, weight=1)
+            ctk.CTkLabel(
+                bet_card,
+                text=(
+                    f"{bet['match']}\n"
+                    f"Pick: {bet['selection']}  •  {bet['bookmaker']}  @  {bet['odds']:.2f}"
+                ),
+                anchor="w",
+                justify="left",
+            ).grid(row=0, column=0, sticky="ew", padx=12, pady=9)
+            ctk.CTkButton(
+                bet_card,
+                text="×",
+                width=30,
+                height=28,
+                fg_color="transparent",
+                hover_color=("#d98b8b", "#8f3333"),
+                text_color=("#a13a3a", "#ef8585"),
+                command=lambda key=event_key: self.remove_bet(key),
+            ).grid(row=0, column=1, padx=(3, 8), pady=8)
+
+        self.update_bet_totals()
+
+    def remove_bet(self, event_key):
+        if event_key in self.selected_bets:
+            del self.selected_bets[event_key]
+            self.update_odds_button_styles(event_key)
+            self.render_bet_slip()
+
+    def clear_bet_slip(self):
+        self.selected_bets.clear()
+        self.update_odds_button_styles()
+        self.render_bet_slip()
+
+    def update_bet_totals(self):
+        """Calculate combined decimal odds, potential return, and profit."""
+        if not self.selected_bets:
+            self.combined_odds_label.configure(text="Combined odds: —")
+            self.return_label.configure(text="Potential return: 0.00")
+            self.profit_label.configure(text="Estimated profit: 0.00")
+            return
+
+        combined_odds = 1.0
+        for bet in self.selected_bets.values():
+            combined_odds *= bet["odds"]
+        self.combined_odds_label.configure(text=f"Combined odds: {combined_odds:.2f}")
+
+        stake_text = self.stake_entry.get().strip()
+        try:
+            stake = float(stake_text) if stake_text else 0.0
+            if stake < 0:
+                raise ValueError
+        except ValueError:
+            self.return_label.configure(text="Potential return: enter a valid stake")
+            self.profit_label.configure(text="Estimated profit: —")
+            return
+
+        potential_return = stake * combined_odds
+        profit = potential_return - stake
+        self.return_label.configure(text=f"Potential return: {potential_return:,.2f}")
+        self.profit_label.configure(text=f"Estimated profit: {profit:,.2f}")
+
+    def populate_bookmaker_details(self, details, event_key, home, away, game_df):
         """Build the full odds table hidden beneath an expandable game card."""
         has_draw = 'draw_odds' in game_df and game_df['draw_odds'].notna().any()
         columns = [("Bookmaker", None), (f"Home — {home}", 'home_odds')]
@@ -658,12 +946,32 @@ class GamblerBotGUI(ctk.CTk):
             for column_index, (_, odds_column) in enumerate(columns):
                 if odds_column is None:
                     value = str(odds_row['bookmaker'])
+                    ctk.CTkLabel(details, text=value).grid(
+                        row=table_row, column=column_index, sticky="ew", padx=7, pady=3
+                    )
                 else:
                     odds = odds_row[odds_column]
-                    value = f"{odds:.2f}" if pd.notna(odds) else "—"
-                ctk.CTkLabel(details, text=value).grid(
-                    row=table_row, column=column_index, sticky="ew", padx=7, pady=3
-                )
+                    if pd.isna(odds):
+                        ctk.CTkLabel(details, text="—").grid(
+                            row=table_row, column=column_index, sticky="ew", padx=7, pady=3
+                        )
+                        continue
+                    selection = home if odds_column == 'home_odds' else away
+                    if odds_column == 'draw_odds':
+                        selection = "Draw"
+                    button = self.create_selectable_odd(
+                        details,
+                        text=f"{odds:.2f}",
+                        event_key=event_key,
+                        match=f"{home} vs {away}",
+                        selection=selection,
+                        bookmaker=str(odds_row['bookmaker']),
+                        odds=float(odds),
+                        odds_column=odds_column,
+                    )
+                    button.grid(
+                        row=table_row, column=column_index, sticky="ew", padx=7, pady=3
+                    )
 
 if __name__ == "__main__":
     app = GamblerBotGUI()
