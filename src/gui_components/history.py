@@ -11,7 +11,7 @@ class HistoryExportMixin:
     """In-session odds history charts and CSV export helpers."""
 
     def build_history_tab(self):
-        self.history_tab.grid_rowconfigure(3, weight=1)
+        self.history_tab.grid_rowconfigure(4, weight=1)
         self.history_tab.grid_columnconfigure(0, weight=1)
         header = ctk.CTkFrame(self.history_tab, fg_color="transparent")
         header.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 4))
@@ -19,15 +19,16 @@ class HistoryExportMixin:
             header, text="Odds history", font=ctk.CTkFont(size=15, weight="bold")
         ).pack(side="left")
         ctk.CTkButton(
-            header, text="Export history CSV", command=self.export_history_csv,
-            width=125, height=28,
+            header, text="Save all history to CSV", command=self.export_history_csv,
+            width=145, height=28,
         ).pack(side="right")
         ctk.CTkLabel(
             self.history_tab,
             text=(
-                "Each completed scan adds one price observation per bookmaker and outcome. "
-                "Search filters the chart only; History CSV exports every observation "
-                "recorded during this app session."
+                "How to use: scan the same competition more than once. Search for a team, "
+                "outcome, or bookmaker, then choose a price line. Each dot is one scan. "
+                "Higher decimal odds mean a larger potential payout. CSV saves all lines, "
+                "not only the searched line."
             ),
             wraplength=650,
             justify="left",
@@ -38,30 +39,47 @@ class HistoryExportMixin:
         history_filters = ctk.CTkFrame(self.history_tab, fg_color="transparent")
         history_filters.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 8))
         history_filters.grid_columnconfigure(1, weight=1)
+        history_filters.grid_columnconfigure(3, weight=2)
+        ctk.CTkLabel(history_filters, text="Search:").grid(
+            row=0, column=0, sticky="w", padx=(0, 6)
+        )
         self.history_search_entry = ctk.CTkEntry(
             history_filters,
             placeholder_text="Search team, outcome, or bookmaker...",
             width=220,
         )
-        self.history_search_entry.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        self.history_search_entry.grid(row=0, column=1, sticky="ew", padx=(0, 12))
         self.history_search_entry.bind("<KeyRelease>", self.filter_history_series)
+        ctk.CTkLabel(history_filters, text="Price line:").grid(
+            row=0, column=2, sticky="w", padx=(0, 6)
+        )
         self.history_selector = ctk.CTkComboBox(
             history_filters, values=["No history yet"], state="readonly",
             command=lambda _value: self.draw_history_chart(),
         )
         self.history_selector.set("No history yet")
-        self.history_selector.grid(row=0, column=1, sticky="ew")
+        self.history_selector.grid(row=0, column=3, sticky="ew")
+        self.history_selection_title = ctk.CTkLabel(
+            self.history_tab,
+            text="No price line selected",
+            anchor="w",
+            justify="left",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        )
+        self.history_selection_title.grid(
+            row=3, column=0, sticky="ew", padx=10, pady=(0, 6)
+        )
         self.history_canvas = tk.Canvas(
             self.history_tab, background="#202020", highlightthickness=0, height=340
         )
-        self.history_canvas.grid(row=3, column=0, sticky="nsew", padx=10, pady=(0, 8))
+        self.history_canvas.grid(row=4, column=0, sticky="nsew", padx=10, pady=(0, 8))
         self.history_canvas.bind("<Configure>", lambda _event: self.draw_history_chart())
         self.history_status = ctk.CTkLabel(
             self.history_tab,
-            text="Run at least two scans to see odds movement over time.",
+            text="Waiting for the first scan. Two or more scans are needed to show movement.",
             text_color=("gray45", "gray65"),
         )
-        self.history_status.grid(row=4, column=0, sticky="w", padx=10, pady=(0, 8))
+        self.history_status.grid(row=5, column=0, sticky="w", padx=10, pady=(0, 8))
 
     def record_odds_history(self, current_odds, metadata):
         timestamp = datetime.now(ZoneInfo("Asia/Jerusalem"))
@@ -104,18 +122,37 @@ class HistoryExportMixin:
         points = self.odds_history.get(identity, []) if identity else []
         width, height = max(canvas.winfo_width(), 300), max(canvas.winfo_height(), 220)
         if not points:
+            self.history_selection_title.configure(
+                text="No matching price line. Change the search or run a scan."
+            )
+            self.history_status.configure(
+                text="No chart is selected. Search less specifically or complete a scan."
+            )
             canvas.create_text(
                 width / 2, height / 2, text="No odds history yet", fill="#aaaaaa",
                 font=("Segoe UI", 12),
             )
             return
-        left, right, top, bottom = 55, width - 22, 24, height - 42
+        latest = points[-1]
+        self.history_selection_title.configure(
+            text=(
+                f"Match: {latest['match']}\n"
+                f"Outcome: {latest['selection']}   •   Bookmaker: {latest['bookmaker']}"
+            )
+        )
+        left, right, top, bottom = 72, width - 22, 24, height - 55
         values = [point["odds"] for point in points]
         low, high = min(values), max(values)
         padding = max((high - low) * 0.15, 0.05)
         low, high = low - padding, high + padding
         canvas.create_line(left, top, left, bottom, fill="#777777")
         canvas.create_line(left, bottom, right, bottom, fill="#777777")
+        canvas.create_text(
+            18, (top + bottom) / 2, text="Decimal odds", fill="#aaaaaa", angle=90
+        )
+        canvas.create_text(
+            (left + right) / 2, height - 12, text="Scan time", fill="#aaaaaa"
+        )
         canvas.create_text(left - 8, top, text=f"{high:.2f}", fill="#aaaaaa", anchor="e")
         canvas.create_text(left - 8, bottom, text=f"{low:.2f}", fill="#aaaaaa", anchor="e")
         coordinates = []
@@ -124,12 +161,16 @@ class HistoryExportMixin:
             y = bottom - (point["odds"] - low) * (bottom - top) / (high - low)
             coordinates.extend((x, y))
         if len(points) > 1:
-            canvas.create_line(*coordinates, fill="#3b9cff", width=3, smooth=True)
+            difference = values[-1] - values[0]
+            line_color = "#62d48b" if difference > 0 else "#ef8585" if difference < 0 else "#aaaaaa"
+            canvas.create_line(*coordinates, fill=line_color, width=3, smooth=True)
+        else:
+            line_color = "#77c4ff"
         for index in range(0, len(coordinates), 2):
             canvas.create_oval(
                 coordinates[index] - 4, coordinates[index + 1] - 4,
                 coordinates[index] + 4, coordinates[index + 1] + 4,
-                fill="#77c4ff", outline="",
+                fill=line_color, outline="",
             )
         canvas.create_text(
             left, bottom + 18,
@@ -141,15 +182,32 @@ class HistoryExportMixin:
             text=points[-1]["timestamp"].strftime("%d %b %H:%M:%S"),
             fill="#aaaaaa", anchor="e",
         )
-        self.history_status.configure(
-            text=f"{len(points)} observations • latest odds {points[-1]['odds']:.2f}"
-        )
+        if len(points) == 1:
+            status = (
+                f"Baseline recorded at {values[0]:.2f}. Scan this competition again "
+                "to see whether the odds rise or fall."
+            )
+        else:
+            difference = values[-1] - values[0]
+            percent = (difference / values[0]) * 100
+            direction = "increased" if difference > 0 else "decreased" if difference < 0 else "did not change"
+            status = (
+                f"Across {len(points)} scans, odds {direction} from {values[0]:.2f} "
+                f"to {values[-1]:.2f} ({difference:+.2f}, {percent:+.1f}%)."
+            )
+        self.history_status.configure(text=status)
 
     def create_export_path(self, prefix):
         """Return a timestamped path inside the project's exports directory."""
         self.EXPORT_DIR.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         return self.EXPORT_DIR / f"{prefix}_{timestamp}.csv"
+
+    def display_export_path(self, path):
+        try:
+            return str(path.relative_to(self.EXPORT_DIR.parent))
+        except ValueError:
+            return str(path)
 
     @staticmethod
     def write_csv(path, fieldnames, rows):
@@ -185,8 +243,11 @@ class HistoryExportMixin:
         try:
             path = self.create_export_path("scan_results")
             self.write_csv(path, list(rows[0]), rows)
+            location = self.display_export_path(path)
+            self.results_export_status.configure(text=f"Saved current scan to {location}")
             self.write_to_terminal(f"[+] Results exported to {path}")
         except OSError as exc:
+            self.results_export_status.configure(text=f"Results export failed: {exc}")
             self.write_to_terminal(f"[!] Results export failed: {exc}")
 
     def export_history_csv(self):
@@ -205,7 +266,9 @@ class HistoryExportMixin:
         try:
             path = self.create_export_path("odds_history")
             self.write_csv(path, list(rows[0]), rows)
-            self.history_status.configure(text=f"History exported to {path}")
+            self.history_status.configure(
+                text=f"Saved all session history to {self.display_export_path(path)}"
+            )
         except OSError as exc:
             self.history_status.configure(text=f"History export failed: {exc}")
 
@@ -224,6 +287,8 @@ class HistoryExportMixin:
         try:
             path = self.create_export_path("gamble_slip")
             self.write_csv(path, list(rows[0]), rows)
-            self.saved_slip_status.configure(text=f"Slip exported to {path}")
+            self.saved_slip_status.configure(
+                text=f"Saved current slip to {self.display_export_path(path)}"
+            )
         except OSError as exc:
             self.saved_slip_status.configure(text=f"Slip export failed: {exc}")

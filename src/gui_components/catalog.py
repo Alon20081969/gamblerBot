@@ -21,26 +21,33 @@ class CompetitionMixin:
         self.browser_frame = ctk.CTkFrame(parent, width=300)
         self.browser_frame.grid(row=0, column=1, sticky="ns")
         self.browser_frame.grid_propagate(False)
-        self.browser_frame.grid_rowconfigure(3, weight=1)
+        self.browser_frame.grid_rowconfigure(4, weight=1)
         self.browser_frame.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
             self.browser_frame, text="Browse competitions",
             font=ctk.CTkFont(size=14, weight="bold"),
         ).grid(row=0, column=0, sticky="w", padx=15, pady=(14, 8))
+        ctk.CTkLabel(
+            self.browser_frame,
+            text="Search by competition name:",
+            anchor="w",
+            text_color=("gray40", "gray70"),
+            font=ctk.CTkFont(size=10),
+        ).grid(row=1, column=0, sticky="ew", padx=15, pady=(0, 3))
         self.competition_search = ctk.CTkEntry(
             self.browser_frame, placeholder_text="Search competitions..."
         )
-        self.competition_search.grid(row=1, column=0, sticky="ew", padx=15, pady=(0, 6))
+        self.competition_search.grid(row=2, column=0, sticky="ew", padx=15, pady=(0, 6))
         self.competition_search.bind("<KeyRelease>", self.filter_competitions)
         self.search_result_count = ctk.CTkLabel(
             self.browser_frame, text="", anchor="w", text_color=("gray45", "gray65"),
             font=ctk.CTkFont(size=11),
         )
-        self.search_result_count.grid(row=2, column=0, sticky="ew", padx=15, pady=(0, 5))
+        self.search_result_count.grid(row=3, column=0, sticky="ew", padx=15, pady=(0, 5))
         self.competition_results = ctk.CTkScrollableFrame(
             self.browser_frame, label_text="", fg_color=("gray88", "gray17")
         )
-        self.competition_results.grid(row=3, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        self.competition_results.grid(row=4, column=0, sticky="nsew", padx=10, pady=(0, 10))
         self.competition_results.grid_columnconfigure(0, weight=1)
         self.populate_competition_browser()
 
@@ -74,7 +81,10 @@ class CompetitionMixin:
             if search_term in name.casefold()
         ]
         self.search_result_count.configure(
-            text=f"{len(matches)} competition{'s' if len(matches) != 1 else ''}"
+            text=(
+                f"{len(matches)} competition{'s' if len(matches) != 1 else ''}"
+                "  •  ★ favorites stay first"
+            )
         )
         if not matches:
             ctk.CTkLabel(

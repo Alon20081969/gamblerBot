@@ -121,7 +121,7 @@ class GamblerBotGUI(
             font=ctk.CTkFont(size=11, weight="bold"),
         )
         self.quota_label.grid(row=0, column=3, columnspan=2, sticky="e", padx=20, pady=(12, 5))
-        ctk.CTkLabel(self.top_frame, text="Sport:").grid(
+        ctk.CTkLabel(self.top_frame, text="1. Choose sport:").grid(
             row=1, column=0, sticky="w", padx=(20, 5), pady=(5, 14)
         )
         self.sport_dropdown = ctk.CTkComboBox(
@@ -130,7 +130,7 @@ class GamblerBotGUI(
         )
         self.sport_dropdown.set("Soccer")
         self.sport_dropdown.grid(row=1, column=1, sticky="w", padx=5, pady=(5, 14))
-        ctk.CTkLabel(self.top_frame, text="Competition:").grid(
+        ctk.CTkLabel(self.top_frame, text="2. Choose competition:").grid(
             row=1, column=2, sticky="w", padx=(18, 5), pady=(5, 14)
         )
         self.competition_dropdown = ctk.CTkComboBox(
@@ -139,20 +139,26 @@ class GamblerBotGUI(
         self.competition_dropdown.grid(row=1, column=3, sticky="w", padx=5, pady=(5, 14))
         self.on_sport_changed("Soccer")
         self.scan_button = ctk.CTkButton(
-            self.top_frame, text="Scan Market", command=self.start_async_scan, width=120
+            self.top_frame, text="3. Scan odds", command=self.start_async_scan, width=120
         )
         self.scan_button.grid(row=1, column=4, sticky="e", padx=20, pady=(5, 14))
         self.catalog_status = ctk.CTkLabel(
             self.top_frame, text="Loading competitions...",
             text_color=("gray45", "gray65"), font=ctk.CTkFont(size=11),
         )
-        self.catalog_status.grid(row=2, column=0, columnspan=5, sticky="w", padx=20, pady=(0, 9))
+        self.catalog_status.grid(row=2, column=0, columnspan=2, sticky="w", padx=20, pady=(0, 9))
+        ctk.CTkLabel(
+            self.top_frame,
+            text="Choose → Scan → review Results → click odds → open Gamble",
+            text_color=("gray40", "gray68"),
+            font=ctk.CTkFont(size=11, weight="bold"),
+        ).grid(row=2, column=2, columnspan=3, sticky="e", padx=20, pady=(0, 9))
         self._build_auto_refresh_controls()
 
     def _build_auto_refresh_controls(self):
         controls = ctk.CTkFrame(self.top_frame, fg_color="transparent")
         controls.grid(row=3, column=0, columnspan=5, sticky="ew", padx=20, pady=(0, 10))
-        ctk.CTkLabel(controls, text="Auto-refresh every").pack(side="left")
+        ctk.CTkLabel(controls, text="Optional auto-scan every").pack(side="left")
         self.refresh_interval = ctk.CTkComboBox(
             controls,
             values=["1", "2", "5", "10", "15", "30"],
@@ -426,7 +432,7 @@ class GamblerBotGUI(
 
     def finish_scan(self):
         self.scan_in_progress = False
-        self.scan_button.configure(state="normal", text="Scan Market")
+        self.scan_button.configure(state="normal", text="3. Scan odds")
         if self.auto_refresh_enabled:
             self.auto_refresh_remaining = self.get_refresh_interval_seconds() or 300
             self.auto_refresh_label.configure(

@@ -33,7 +33,7 @@ class ResultsMixin:
             text_color=("gray45", "gray65"),
             font=ctk.CTkFont(size=10),
         ).pack(side="right", padx=12)
-        ctk.CTkLabel(
+        self.results_export_status = ctk.CTkLabel(
             self.results_tab,
             text=(
                 "Export scan CSV saves every bookmaker/outcome from the current scan, "
@@ -42,7 +42,8 @@ class ResultsMixin:
             anchor="w",
             text_color=("gray45", "gray65"),
             font=ctk.CTkFont(size=10),
-        ).grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 6))
+        )
+        self.results_export_status.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 6))
         self.game_results = ctk.CTkScrollableFrame(
             self.results_tab, fg_color=("gray90", "gray14")
         )
