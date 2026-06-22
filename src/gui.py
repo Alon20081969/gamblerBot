@@ -6,7 +6,12 @@ from pathlib import Path
 import customtkinter as ctk
 import pandas as pd
 
-from src.gui_components import BettingMixin, CompetitionMixin, ResultsMixin
+from src.gui_components import (
+    BettingMixin,
+    CompetitionMixin,
+    HistoryExportMixin,
+    ResultsMixin,
+)
 from src.ingestion.api_client import OddsAPIClient
 from src.models.probabilities import MarketAnalyzer
 
@@ -14,11 +19,14 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 
-class GamblerBotGUI(CompetitionMixin, ResultsMixin, BettingMixin, ctk.CTk):
+class GamblerBotGUI(
+    CompetitionMixin, ResultsMixin, BettingMixin, HistoryExportMixin, ctk.CTk
+):
     """Application shell coordinating the API, worker threads, and UI components."""
 
     FAVORITES_FILE = Path(__file__).resolve().parents[1] / ".gamblerbot_favorites.json"
     SAVED_SLIPS_FILE = Path(__file__).resolve().parents[1] / ".gamblerbot_saved_slips.json"
+    EXPORT_DIR = Path(__file__).resolve().parents[1] / "exports"
     FALLBACK_COMPETITIONS = {
         "Baseball": {"MLB": {"key": "baseball_mlb", "region": "us"}},
         "Basketball": {"NBA": {"key": "basketball_nba", "region": "us"}},
@@ -48,6 +56,8 @@ class GamblerBotGUI(CompetitionMixin, ResultsMixin, BettingMixin, ctk.CTk):
         self.custom_odd_controls = {}
         self.previous_odds_snapshot = {}
         self.odds_movements = {}
+        self.odds_history = {}
+        self.history_series_labels = {}
         self.ui_queue = queue.Queue()
         self.is_closing = False
         self.results_generation = 0
@@ -59,6 +69,7 @@ class GamblerBotGUI(CompetitionMixin, ResultsMixin, BettingMixin, ctk.CTk):
         self.auto_refresh_started = False
         self.auto_refresh_after_id = None
         self.auto_refresh_remaining = 5 * 60
+        self.auto_refresh_quota_paused = False
         self.competition_catalog = {
             sport: {name: config.copy() for name, config in competitions.items()}
             for sport, competitions in self.FALLBACK_COMPETITIONS.items()
@@ -83,10 +94,12 @@ class GamblerBotGUI(CompetitionMixin, ResultsMixin, BettingMixin, ctk.CTk):
         self.results_tab = self.view_tabs.add("Results")
         self.gamble_tab = self.view_tabs.add("Gamble")
         self.calculator_tab = self.view_tabs.add("Calculator")
+        self.history_tab = self.view_tabs.add("History")
         self.console_tab = self.view_tabs.add("Console")
 
         self.build_results_tab()
         self.build_betting_tabs()
+        self.build_history_tab()
         self._build_console_tab()
         self.view_tabs.set("Results")
         self.build_competition_browser(self.content_frame)
@@ -166,12 +179,21 @@ class GamblerBotGUI(CompetitionMixin, ResultsMixin, BettingMixin, ctk.CTk):
             font=ctk.CTkFont(size=11, weight="bold"),
         )
         self.auto_refresh_label.pack(side="left", padx=12)
+        quota_controls = ctk.CTkFrame(controls, fg_color="transparent")
+        quota_controls.pack(side="right")
         ctk.CTkLabel(
-            controls,
-            text="Automatic scans use API credits",
-            text_color=("gray50", "gray60"),
+            quota_controls, text="Pause auto-refresh at",
+            text_color=("gray50", "gray60"), font=ctk.CTkFont(size=10),
+        ).pack(side="left")
+        self.credit_floor = ctk.CTkComboBox(
+            quota_controls, values=["5", "10", "25", "50", "100"], width=68
+        )
+        self.credit_floor.set("10")
+        self.credit_floor.pack(side="left", padx=5)
+        ctk.CTkLabel(
+            quota_controls, text="credits", text_color=("gray50", "gray60"),
             font=ctk.CTkFont(size=10),
-        ).pack(side="right")
+        ).pack(side="left")
 
     def _build_console_tab(self):
         header = ctk.CTkFrame(self.console_tab, fg_color="transparent")
@@ -231,10 +253,48 @@ class GamblerBotGUI(CompetitionMixin, ResultsMixin, BettingMixin, ctk.CTk):
         except ValueError:
             return None
 
+    def get_credit_floor(self):
+        try:
+            floor = int(self.credit_floor.get().strip())
+            return floor if floor >= 0 else None
+        except ValueError:
+            return None
+
+    def remaining_credit_count(self):
+        try:
+            remaining = self.client.usage.get("remaining")
+            return int(remaining) if remaining is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def auto_refresh_has_credits(self):
+        remaining = self.remaining_credit_count()
+        floor = self.get_credit_floor()
+        return remaining is None or floor is None or remaining > floor
+
+    def pause_auto_refresh_for_quota(self):
+        remaining = self.remaining_credit_count()
+        floor = self.get_credit_floor()
+        if remaining is None or floor is None or remaining > floor:
+            return False
+        if not self.auto_refresh_enabled:
+            return False
+        self.auto_refresh_enabled = False
+        self.auto_refresh_quota_paused = True
+        self.cancel_auto_refresh_tick()
+        self.auto_refresh_button.configure(text="Resume")
+        self.auto_refresh_label.configure(
+            text=f"Credit protection paused auto-refresh • {remaining} remaining"
+        )
+        return True
+
     def change_auto_refresh_interval(self):
         seconds = self.get_refresh_interval_seconds()
         if seconds is None:
             self.auto_refresh_label.configure(text="Enter 0.01–1440 minutes")
+            return
+        if self.auto_refresh_enabled and not self.auto_refresh_has_credits():
+            self.pause_auto_refresh_for_quota()
             return
         self.auto_refresh_remaining = seconds
         state = "Next scan" if self.auto_refresh_enabled else (
@@ -260,10 +320,20 @@ class GamblerBotGUI(CompetitionMixin, ResultsMixin, BettingMixin, ctk.CTk):
         if seconds is None:
             self.auto_refresh_label.configure(text="Enter 0.01–1440 minutes")
             return
+        if not self.auto_refresh_has_credits():
+            remaining = self.remaining_credit_count()
+            self.auto_refresh_started = True
+            self.auto_refresh_quota_paused = True
+            self.auto_refresh_button.configure(text="Resume")
+            self.auto_refresh_label.configure(
+                text=f"Credit protection paused auto-refresh • {remaining} remaining"
+            )
+            return
         if not self.auto_refresh_started or self.auto_refresh_remaining <= 0:
             self.auto_refresh_remaining = seconds
         self.auto_refresh_started = True
         self.auto_refresh_enabled = True
+        self.auto_refresh_quota_paused = False
         self.auto_refresh_button.configure(text="Pause")
         self.auto_refresh_label.configure(
             text=f"Next scan • {self.format_countdown(self.auto_refresh_remaining)}"
@@ -290,6 +360,9 @@ class GamblerBotGUI(CompetitionMixin, ResultsMixin, BettingMixin, ctk.CTk):
         if self.scan_in_progress:
             self.auto_refresh_label.configure(text="Scan running…")
             return
+        if not self.auto_refresh_has_credits():
+            self.pause_auto_refresh_for_quota()
+            return
         self.auto_refresh_remaining -= 1
         if self.auto_refresh_remaining <= 0:
             if self.start_async_scan():
@@ -315,6 +388,7 @@ class GamblerBotGUI(CompetitionMixin, ResultsMixin, BettingMixin, ctk.CTk):
         if last is not None:
             text += f"  |  last scan cost {last}"
         self.quota_label.configure(text=text)
+        self.pause_auto_refresh_for_quota()
 
     def write_to_terminal(self, text):
         if threading.current_thread() is not threading.main_thread():
@@ -359,7 +433,7 @@ class GamblerBotGUI(CompetitionMixin, ResultsMixin, BettingMixin, ctk.CTk):
                 text=f"Next scan • {self.format_countdown(self.auto_refresh_remaining)}"
             )
             self.schedule_auto_refresh_tick()
-        elif self.auto_refresh_started:
+        elif self.auto_refresh_started and not self.auto_refresh_quota_paused:
             self.auto_refresh_label.configure(
                 text=f"Paused • {self.format_countdown(self.auto_refresh_remaining)}"
             )

@@ -10,7 +10,7 @@ class ResultsMixin:
     """Searchable, incrementally rendered game cards and bookmaker details."""
 
     def build_results_tab(self):
-        self.results_tab.grid_rowconfigure(1, weight=1)
+        self.results_tab.grid_rowconfigure(2, weight=1)
         self.results_tab.grid_columnconfigure(0, weight=1)
         header = ctk.CTkFrame(self.results_tab, fg_color="transparent")
         header.grid(row=0, column=0, sticky="ew", padx=8, pady=(6, 8))
@@ -23,16 +23,30 @@ class ResultsMixin:
         )
         self.result_search_entry.pack(side="right")
         self.result_search_entry.bind("<KeyRelease>", self.filter_result_teams)
+        ctk.CTkButton(
+            header, text="Export scan CSV", command=self.export_results_csv,
+            width=105, height=28,
+        ).pack(side="right", padx=(0, 8))
         ctk.CTkLabel(
             header,
             text="↑ odds rose   ↓ odds fell",
             text_color=("gray45", "gray65"),
             font=ctk.CTkFont(size=10),
         ).pack(side="right", padx=12)
+        ctk.CTkLabel(
+            self.results_tab,
+            text=(
+                "Export scan CSV saves every bookmaker/outcome from the current scan, "
+                "including its movement since the previous scan."
+            ),
+            anchor="w",
+            text_color=("gray45", "gray65"),
+            font=ctk.CTkFont(size=10),
+        ).grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 6))
         self.game_results = ctk.CTkScrollableFrame(
             self.results_tab, fg_color=("gray90", "gray14")
         )
-        self.game_results.grid(row=1, column=0, sticky="nsew", padx=4, pady=(0, 4))
+        self.game_results.grid(row=2, column=0, sticky="nsew", padx=4, pady=(0, 4))
         self.game_results.grid_columnconfigure(0, weight=1)
         self.show_results_message("Scan a competition to see its games here.")
 
@@ -60,6 +74,7 @@ class ResultsMixin:
     def capture_odds_movements(self, df):
         """Compare this scan with prior prices from the same session."""
         current = {}
+        metadata = {}
         for _, row in df.iterrows():
             event_id = row.get('event_id')
             event_key = str(event_id) if pd.notna(event_id) else (
@@ -69,7 +84,18 @@ class ResultsMixin:
             for odds_column in ('home_odds', 'draw_odds', 'away_odds'):
                 odds = row.get(odds_column)
                 if pd.notna(odds):
-                    current[(event_key, bookmaker, odds_column)] = float(odds)
+                    identity = (event_key, bookmaker, odds_column)
+                    current[identity] = float(odds)
+                    selection = (
+                        "Draw" if odds_column == 'draw_odds'
+                        else str(row.get('home_team')) if odds_column == 'home_odds'
+                        else str(row.get('away_team'))
+                    )
+                    metadata[identity] = {
+                        "match": f"{row.get('home_team')} vs {row.get('away_team')}",
+                        "selection": selection,
+                        "bookmaker": bookmaker,
+                    }
 
         movements = {}
         for identity, current_odds in current.items():
@@ -80,6 +106,7 @@ class ResultsMixin:
 
         self.odds_movements = movements
         self.previous_odds_snapshot.update(current)
+        self.record_odds_history(current, metadata)
 
     def filter_result_teams(self, _event=None):
         if self.result_search_after_id is not None:

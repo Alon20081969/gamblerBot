@@ -22,6 +22,10 @@ class BettingMixin:
             width=80, height=28, fg_color=("gray70", "gray28"),
             hover_color=("gray60", "gray35"),
         ).pack(side="right")
+        ctk.CTkButton(
+            slip_header, text="Export slip CSV", command=self.export_gamble_slip_csv,
+            width=105, height=28,
+        ).pack(side="right", padx=(0, 6))
 
         saved_controls = ctk.CTkFrame(self.gamble_tab, fg_color="transparent")
         saved_controls.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 8))
@@ -50,7 +54,9 @@ class BettingMixin:
             hover_color=("#9f4646", "#a94444"),
         ).grid(row=0, column=4)
         self.saved_slip_status = ctk.CTkLabel(
-            saved_controls, text="", anchor="w",
+            saved_controls,
+            text="Export slip CSV saves only the selections and stake currently in this slip.",
+            anchor="w",
             text_color=("gray45", "gray65"), font=ctk.CTkFont(size=10),
         )
         self.saved_slip_status.grid(
