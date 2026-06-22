@@ -23,6 +23,12 @@ class ResultsMixin:
         )
         self.result_search_entry.pack(side="right")
         self.result_search_entry.bind("<KeyRelease>", self.filter_result_teams)
+        ctk.CTkLabel(
+            header,
+            text="↑ odds rose   ↓ odds fell",
+            text_color=("gray45", "gray65"),
+            font=ctk.CTkFont(size=10),
+        ).pack(side="right", padx=12)
         self.game_results = ctk.CTkScrollableFrame(
             self.results_tab, fg_color=("gray90", "gray14")
         )
@@ -43,12 +49,37 @@ class ResultsMixin:
         ).grid(row=0, column=0, sticky="ew", padx=20, pady=30)
 
     def display_game_results(self, df):
+        self.capture_odds_movements(df)
         self.latest_results_df = df.copy()
         if self.result_search_after_id is not None:
             self.after_cancel(self.result_search_after_id)
             self.result_search_after_id = None
         self.result_search_entry.delete(0, tk.END)
         self.render_filtered_game_results()
+
+    def capture_odds_movements(self, df):
+        """Compare this scan with prior prices from the same session."""
+        current = {}
+        for _, row in df.iterrows():
+            event_id = row.get('event_id')
+            event_key = str(event_id) if pd.notna(event_id) else (
+                f"{row.get('home_team')}|{row.get('away_team')}"
+            )
+            bookmaker = str(row.get('bookmaker'))
+            for odds_column in ('home_odds', 'draw_odds', 'away_odds'):
+                odds = row.get(odds_column)
+                if pd.notna(odds):
+                    current[(event_key, bookmaker, odds_column)] = float(odds)
+
+        movements = {}
+        for identity, current_odds in current.items():
+            previous_odds = self.previous_odds_snapshot.get(identity)
+            if previous_odds is not None:
+                difference = current_odds - previous_odds
+                movements[identity] = difference if abs(difference) >= 0.001 else 0.0
+
+        self.odds_movements = movements
+        self.previous_odds_snapshot.update(current)
 
     def filter_result_teams(self, _event=None):
         if self.result_search_after_id is not None:

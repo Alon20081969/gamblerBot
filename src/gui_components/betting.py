@@ -173,15 +173,22 @@ class BettingMixin:
     def create_selectable_odd(self, parent, text, event_key, match, selection,
                               bookmaker, odds, odds_column):
         identity = (event_key, bookmaker, odds_column)
+        movement = self.odds_movements.get(identity)
+        if movement is not None and movement > 0:
+            display_text = f"{text}  ↑ +{movement:.2f}"
+        elif movement is not None and movement < 0:
+            display_text = f"{text}  ↓ {movement:.2f}"
+        else:
+            display_text = text
         button = ctk.CTkButton(
-            parent, text=text, anchor="center", height=28, border_width=1,
+            parent, text=display_text, anchor="center", height=28, border_width=1,
             corner_radius=6, fg_color="transparent", hover_color="#287fd1",
             border_color=("gray65", "gray35"), text_color=("gray10", "gray92"),
             command=lambda: self.toggle_bet(
                 identity, event_key, match, selection, bookmaker, odds
             ),
         )
-        self.odds_buttons.setdefault(identity, []).append((button, text))
+        self.odds_buttons.setdefault(identity, []).append((button, display_text, movement))
         self.update_odds_button_style(identity)
         return button
 
@@ -200,7 +207,7 @@ class BettingMixin:
 
     def update_odds_button_style(self, identity):
         selected = any(bet["identity"] == identity for bet in self.selected_bets.values())
-        for button, base_text in self.odds_buttons.get(identity, []):
+        for button, base_text, movement in self.odds_buttons.get(identity, []):
             try:
                 if not button.winfo_exists():
                     continue
@@ -210,7 +217,12 @@ class BettingMixin:
                     hover_color="#3b9cff" if selected else "#287fd1",
                     border_color="#77c4ff" if selected else ("gray65", "gray35"),
                     border_width=2 if selected else 1,
-                    text_color="white" if selected else ("gray10", "gray92"),
+                    text_color=(
+                        "white" if selected
+                        else ("#147a3d", "#62d48b") if movement and movement > 0
+                        else ("#a13a3a", "#ef8585") if movement and movement < 0
+                        else ("gray10", "gray92")
+                    ),
                 )
             except tk.TclError:
                 continue

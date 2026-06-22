@@ -44,6 +44,8 @@ class GamblerBotGUI(CompetitionMixin, ResultsMixin, BettingMixin, ctk.CTk):
         self.selected_bets = {}
         self.odds_buttons = {}
         self.custom_odd_controls = {}
+        self.previous_odds_snapshot = {}
+        self.odds_movements = {}
         self.ui_queue = queue.Queue()
         self.is_closing = False
         self.results_generation = 0
