@@ -1,5 +1,6 @@
 import json
 import queue
+import re
 import threading
 import tkinter as tk
 from datetime import datetime, timezone
@@ -46,6 +47,7 @@ class GamblerBotGUI(ctk.CTk):
         self.favorite_competition_keys = self.load_favorites()
         self.selected_bets = {}
         self.odds_buttons = {}
+        self.custom_odd_controls = {}
         self.ui_queue = queue.Queue()
         self.is_closing = False
         self.results_generation = 0
@@ -145,6 +147,7 @@ class GamblerBotGUI(ctk.CTk):
         self.view_tabs.pack(fill="both", expand=True, padx=8, pady=8)
         self.results_tab = self.view_tabs.add("Results")
         self.gamble_tab = self.view_tabs.add("Gamble")
+        self.calculator_tab = self.view_tabs.add("Calculator")
         self.console_tab = self.view_tabs.add("Console")
         self.view_tabs.set("Results")
 
@@ -228,6 +231,50 @@ class GamblerBotGUI(ctk.CTk):
             font=ctk.CTkFont(size=10),
         ).grid(row=4, column=0, columnspan=2, sticky="w", padx=12, pady=(3, 10))
         self.render_bet_slip()
+
+        # --- Standalone Odds Calculator Tab ---
+        self.calculator_tab.grid_columnconfigure(0, weight=1)
+        calculator = ctk.CTkFrame(self.calculator_tab)
+        calculator.grid(row=0, column=0, sticky="new", padx=18, pady=18)
+        calculator.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(
+            calculator,
+            text="Decimal odds calculator",
+            font=ctk.CTkFont(size=16, weight="bold"),
+        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=16, pady=(16, 12))
+        ctk.CTkLabel(calculator, text="Odds:").grid(
+            row=1, column=0, sticky="w", padx=16, pady=6
+        )
+        self.calculator_odds_entry = ctk.CTkEntry(
+            calculator,
+            placeholder_text="Example: 1.80, 2.10, 1.55",
+        )
+        self.calculator_odds_entry.grid(row=1, column=1, sticky="ew", padx=(6, 16), pady=6)
+        ctk.CTkLabel(calculator, text="Stake:").grid(
+            row=2, column=0, sticky="w", padx=16, pady=6
+        )
+        self.calculator_stake_entry = ctk.CTkEntry(calculator, placeholder_text="100")
+        self.calculator_stake_entry.grid(row=2, column=1, sticky="ew", padx=(6, 16), pady=6)
+        self.calculator_combined_label = ctk.CTkLabel(
+            calculator, text="Combined odds: —", anchor="w"
+        )
+        self.calculator_combined_label.grid(
+            row=3, column=0, columnspan=2, sticky="ew", padx=16, pady=(12, 3)
+        )
+        self.calculator_return_label = ctk.CTkLabel(
+            calculator, text="Potential return: 0.00", anchor="w"
+        )
+        self.calculator_return_label.grid(
+            row=4, column=0, columnspan=2, sticky="ew", padx=16, pady=3
+        )
+        self.calculator_profit_label = ctk.CTkLabel(
+            calculator, text="Estimated profit: 0.00", anchor="w"
+        )
+        self.calculator_profit_label.grid(
+            row=5, column=0, columnspan=2, sticky="ew", padx=16, pady=(3, 16)
+        )
+        self.calculator_odds_entry.bind("<KeyRelease>", self.update_odds_calculator)
+        self.calculator_stake_entry.bind("<KeyRelease>", self.update_odds_calculator)
 
         self.log_header = ctk.CTkFrame(self.console_tab, fg_color="transparent")
         self.log_header.pack(fill="x", padx=15, pady=(10, 5))
@@ -680,6 +727,7 @@ class GamblerBotGUI(ctk.CTk):
         for widget in self.game_results.winfo_children():
             widget.destroy()
         self.odds_buttons = {}
+        self.custom_odd_controls = {}
 
         self.view_tabs.set("Results")
         grouped = filtered_df.groupby(
@@ -731,7 +779,7 @@ class GamblerBotGUI(ctk.CTk):
                 if not state["loaded"]:
                     self.populate_bookmaker_details(details, event_key, home, away, game_df)
                     state["loaded"] = True
-                details.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 10))
+                details.grid(row=4, column=0, sticky="ew", padx=10, pady=(0, 10))
                 arrow_button.configure(text=f"▼  {home} vs {away}")
             else:
                 details.grid_remove()
@@ -810,6 +858,67 @@ class GamblerBotGUI(ctk.CTk):
             )
             lowest_button.grid(row=selection_row, column=2, sticky="ew", padx=6, pady=2)
 
+        custom_frame = ctk.CTkFrame(card, fg_color=("gray88", "gray19"))
+        custom_frame.grid(row=3, column=0, sticky="ew", padx=12, pady=(0, 9))
+        custom_frame.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(
+            custom_frame,
+            text="Custom odd:",
+            font=ctk.CTkFont(size=11, weight="bold"),
+        ).grid(row=0, column=0, padx=(10, 5), pady=8)
+
+        custom_options = [f"Home — {home}"]
+        if 'draw_odds' in game_df and game_df['draw_odds'].notna().any():
+            custom_options.append("Draw")
+        custom_options.append(f"Away — {away}")
+        custom_selection = ctk.CTkComboBox(
+            custom_frame,
+            values=custom_options,
+            state="readonly",
+            width=170,
+        )
+        custom_selection.set(custom_options[0])
+        custom_selection.grid(row=0, column=1, sticky="ew", padx=5, pady=8)
+
+        custom_odds_entry = ctk.CTkEntry(
+            custom_frame,
+            placeholder_text="Decimal odd",
+            width=95,
+        )
+        custom_odds_entry.grid(row=0, column=2, padx=5, pady=8)
+        custom_feedback = ctk.CTkLabel(
+            custom_frame,
+            text="",
+            width=18,
+            text_color=("#a13a3a", "#ef8585"),
+        )
+        custom_feedback.grid(row=0, column=4, padx=(3, 8), pady=8)
+        ctk.CTkButton(
+            custom_frame,
+            text="Add to slip",
+            width=82,
+            command=lambda: self.add_custom_odd(
+                event_key,
+                home,
+                away,
+                custom_selection.get(),
+                custom_odds_entry.get(),
+                custom_feedback,
+            ),
+        ).grid(row=0, column=3, padx=5, pady=8)
+
+        self.custom_odd_controls[event_key] = {
+            "feedback": custom_feedback,
+            "entry": custom_odds_entry,
+            "selection": custom_selection,
+        }
+        existing_bet = self.selected_bets.get(event_key)
+        if existing_bet and existing_bet.get("bookmaker") == "Custom odd":
+            if existing_bet["selection"] in custom_options:
+                custom_selection.set(existing_bet["selection"])
+            custom_odds_entry.insert(0, f"{existing_bet['odds']:g}")
+            self.set_custom_odd_status(event_key, True)
+
     @staticmethod
     def metadata_value(value):
         """Return a readable venue value without exposing pandas NaN values."""
@@ -833,6 +942,85 @@ class GamblerBotGUI(ctk.CTk):
             return jerusalem.strftime("%a, %d %b %Y at %H:%M")
         except (ValueError, TypeError, ZoneInfoNotFoundError):
             return "Invalid kickoff time"
+
+    def add_custom_odd(self, event_key, home, away, selection, odds_text, feedback):
+        """Validate a user-entered decimal odd and add it to the Gamble slip."""
+        try:
+            odds = float(odds_text.strip())
+            if odds <= 1.0:
+                raise ValueError
+        except (ValueError, AttributeError):
+            feedback.configure(text="Enter an odd above 1.00")
+            return
+
+        identity = (event_key, "Custom odd", f"{selection}:{odds:.8g}")
+        self.selected_bets[event_key] = {
+            "identity": identity,
+            "match": f"{home} vs {away}",
+            "selection": selection,
+            "bookmaker": "Custom odd",
+            "odds": odds,
+        }
+        self.update_odds_button_styles(event_key)
+        self.render_bet_slip()
+        self.set_custom_odd_status(event_key, True)
+
+    def set_custom_odd_status(self, event_key, added):
+        """Keep the per-game custom status synchronized with the Gamble slip."""
+        controls = self.custom_odd_controls.get(event_key)
+        if not controls:
+            return
+        try:
+            controls["feedback"].configure(
+                text="Added ✓" if added else "",
+                text_color=("#147a3d", "#62d48b") if added else ("gray40", "gray65"),
+            )
+        except tk.TclError:
+            self.custom_odd_controls.pop(event_key, None)
+
+    @staticmethod
+    def parse_decimal_odds(odds_text):
+        """Parse comma-, semicolon-, or whitespace-separated decimal odds."""
+        tokens = [token for token in re.split(r"[,;\s]+", odds_text.strip()) if token]
+        if not tokens:
+            return []
+        odds = [float(token) for token in tokens]
+        if any(value <= 1.0 for value in odds):
+            raise ValueError("Decimal odds must be above 1.00")
+        return odds
+
+    def update_odds_calculator(self, _event=None):
+        """Update the standalone combined-odds calculator."""
+        try:
+            odds_values = self.parse_decimal_odds(self.calculator_odds_entry.get())
+            stake_text = self.calculator_stake_entry.get().strip()
+            stake = float(stake_text) if stake_text else 0.0
+            if stake < 0:
+                raise ValueError
+        except ValueError:
+            self.calculator_combined_label.configure(
+                text="Combined odds: enter valid decimal odds above 1.00"
+            )
+            self.calculator_return_label.configure(text="Potential return: —")
+            self.calculator_profit_label.configure(text="Estimated profit: —")
+            return
+
+        if not odds_values:
+            self.calculator_combined_label.configure(text="Combined odds: —")
+            self.calculator_return_label.configure(text="Potential return: 0.00")
+            self.calculator_profit_label.configure(text="Estimated profit: 0.00")
+            return
+
+        combined = 1.0
+        for odds in odds_values:
+            combined *= odds
+        potential_return = stake * combined
+        profit = potential_return - stake
+        self.calculator_combined_label.configure(text=f"Combined odds: {combined:.2f}")
+        self.calculator_return_label.configure(
+            text=f"Potential return: {potential_return:,.2f}"
+        )
+        self.calculator_profit_label.configure(text=f"Estimated profit: {profit:,.2f}")
 
     def create_selectable_odd(self, parent, text, event_key, match, selection,
                               bookmaker, odds, odds_column):
@@ -871,6 +1059,7 @@ class GamblerBotGUI(ctk.CTk):
                 "odds": odds,
             }
 
+        self.set_custom_odd_status(event_key, False)
         self.update_odds_button_styles(event_key)
         self.render_bet_slip()
 
@@ -947,11 +1136,14 @@ class GamblerBotGUI(ctk.CTk):
     def remove_bet(self, event_key):
         if event_key in self.selected_bets:
             del self.selected_bets[event_key]
+            self.set_custom_odd_status(event_key, False)
             self.update_odds_button_styles(event_key)
             self.render_bet_slip()
 
     def clear_bet_slip(self):
         self.selected_bets.clear()
+        for event_key in list(self.custom_odd_controls):
+            self.set_custom_odd_status(event_key, False)
         self.update_odds_button_styles()
         self.render_bet_slip()
 
