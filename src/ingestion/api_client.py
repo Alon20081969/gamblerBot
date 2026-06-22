@@ -7,6 +7,27 @@ class OddsAPIClient:
         self.api_key = Config.ODDS_API_KEY
         self.base_url = "https://api.the-odds-api.com/v4/sports"
 
+    def get_available_sports(self, include_inactive=True):
+        """Return the provider's competition catalog.
+
+        ``include_inactive`` keeps off-season competitions (for example the FIFA
+        World Cup) visible in the UI even when they currently have no fixtures.
+        """
+        if not self.api_key:
+            return []
+
+        params = {'apiKey': self.api_key}
+        if include_inactive:
+            params['all'] = 'true'
+
+        try:
+            response = requests.get(self.base_url, params=params, timeout=15)
+            response.raise_for_status()
+            return response.json()
+        except (requests.RequestException, ValueError) as exc:
+            print(f"[!] Could not load competition catalog: {exc}")
+            return []
+
     def get_upcoming_matches(self, sport="soccer_uefa_european_championship", region="eu", market="h2h"):
         """Fetches live head-to-head odds for a specified sport and region."""
         if not self.api_key:
@@ -23,7 +44,7 @@ class OddsAPIClient:
         
         try:
             print(f"[*] Requesting live lines for sport: {sport}...")
-            response = requests.get(url, params=params)
+            response = requests.get(url, params=params, timeout=20)
             
             if response.status_code == 200:
                 return response.json()

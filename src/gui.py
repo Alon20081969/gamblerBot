@@ -9,49 +9,82 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 class GamblerBotGUI(ctk.CTk):
+    # Used immediately at startup and whenever the catalog endpoint is unavailable.
+    # The live API catalog is merged into this data after the window opens.
+    FALLBACK_COMPETITIONS = {
+        "Baseball": {
+            "MLB": {"key": "baseball_mlb", "region": "us"},
+        },
+        "Basketball": {
+            "NBA": {"key": "basketball_nba", "region": "us"},
+        },
+        "American Football": {
+            "NFL": {"key": "americanfootball_nfl", "region": "us"},
+        },
+        "Soccer": {
+            "English Premier League": {"key": "soccer_epl", "region": "eu"},
+            "UEFA Champions League": {"key": "soccer_uefa_champs_league", "region": "eu"},
+            "FIFA World Cup": {"key": "soccer_fifa_world_cup", "region": "eu"},
+        },
+    }
+
     def __init__(self):
         super().__init__()
 
         self.title("GamblerBot - Live Market Scanner")
-        self.geometry("800x550")
-        self.resizable(False, False)
+        self.geometry("1040x650")
+        self.minsize(900, 560)
 
         self.client = OddsAPIClient()
 
-        # Friendly display names mapped directly to API keys and regions
-        self.SPORT_MARKETS = {
-            "MLB Baseball": {"key": "baseball_mlb", "region": "us"},
-            "NBA Basketball": {"key": "basketball_nba", "region": "us"},
-            "NFL Football": {"key": "football_nfl", "region": "us"},
-            "UEFA Champions League": {"key": "soccer_uefa_champions_league", "region": "eu"},
-            "English Premier League": {"key": "soccer_epl", "region": "eu"}
+        self.competition_catalog = {
+            sport: {name: config.copy() for name, config in competitions.items()}
+            for sport, competitions in self.FALLBACK_COMPETITIONS.items()
         }
 
         self.create_widgets()
+        self.refresh_competition_catalog()
 
     def create_widgets(self):
         # --- Top Control Bar ---
-        self.top_frame = ctk.CTkFrame(self, height=70, corner_radius=0)
+        self.top_frame = ctk.CTkFrame(self, corner_radius=10)
         self.top_frame.pack(side="top", fill="x", padx=10, pady=10)
+        self.top_frame.grid_columnconfigure(3, weight=1)
 
         self.title_label = ctk.CTkLabel(
             self.top_frame, 
             text="GamblerBot Dashboard", 
             font=ctk.CTkFont(size=18, weight="bold")
         )
-        self.title_label.pack(side="left", padx=20)
+        self.title_label.grid(row=0, column=0, columnspan=5, sticky="w", padx=20, pady=(12, 5))
 
         # --- Sport Selector Dropdown ---
         self.sport_label = ctk.CTkLabel(self.top_frame, text="Sport:", font=ctk.CTkFont(size=12))
-        self.sport_label.pack(side="left", padx=(20, 5))
+        self.sport_label.grid(row=1, column=0, sticky="w", padx=(20, 5), pady=(5, 14))
 
         self.sport_dropdown = ctk.CTkComboBox(
             self.top_frame,
-            values=list(self.SPORT_MARKETS.keys()),
-            width=180
+            values=sorted(self.competition_catalog),
+            command=self.on_sport_changed,
+            width=170,
+            state="readonly",
         )
-        self.sport_dropdown.set("MLB Baseball")
-        self.sport_dropdown.pack(side="left", padx=5)
+        self.sport_dropdown.set("Soccer")
+        self.sport_dropdown.grid(row=1, column=1, sticky="w", padx=5, pady=(5, 14))
+
+        self.competition_label = ctk.CTkLabel(
+            self.top_frame, text="Competition:", font=ctk.CTkFont(size=12)
+        )
+        self.competition_label.grid(row=1, column=2, sticky="w", padx=(18, 5), pady=(5, 14))
+
+        self.competition_dropdown = ctk.CTkComboBox(
+            self.top_frame,
+            values=[],
+            width=260,
+            state="readonly",
+        )
+        self.competition_dropdown.grid(row=1, column=3, sticky="w", padx=5, pady=(5, 14))
+        self.on_sport_changed("Soccer")
 
         # --- Action Button ---
         self.scan_button = ctk.CTkButton(
@@ -60,7 +93,15 @@ class GamblerBotGUI(ctk.CTk):
             command=self.start_async_scan, 
             width=120
         )
-        self.scan_button.pack(side="right", padx=20)
+        self.scan_button.grid(row=1, column=4, sticky="e", padx=20, pady=(5, 14))
+
+        self.catalog_status = ctk.CTkLabel(
+            self.top_frame,
+            text="Loading competitions...",
+            text_color=("gray45", "gray65"),
+            font=ctk.CTkFont(size=11),
+        )
+        self.catalog_status.grid(row=2, column=0, columnspan=5, sticky="w", padx=20, pady=(0, 9))
 
         # --- Console Feed Text Pane ---
         self.log_frame = ctk.CTkFrame(self)
@@ -81,10 +122,77 @@ class GamblerBotGUI(ctk.CTk):
         )
         self.terminal_box.pack(fill="both", expand=True, padx=15, pady=(0, 15))
         
-        self.write_to_terminal("System Ready. Select a sport and click 'Scan Market'...\n")
+        self.write_to_terminal("System Ready. Select a sport and competition, then click 'Scan Market'...\n")
+
+    @staticmethod
+    def region_for_group(group):
+        """Choose the bookmaker region most likely to cover a sport group."""
+        group_lower = group.lower()
+        if any(name in group_lower for name in ("aussie", "rugby league")):
+            return "au"
+        if any(name in group_lower for name in ("soccer", "rugby", "cricket")):
+            return "eu"
+        return "us"
+
+    def on_sport_changed(self, selected_sport):
+        competitions = sorted(self.competition_catalog.get(selected_sport, {}))
+        self.competition_dropdown.configure(values=competitions)
+        self.competition_dropdown.set(competitions[0] if competitions else "No competitions available")
+
+    def refresh_competition_catalog(self):
+        """Load every competition exposed by the odds provider without freezing the UI."""
+        threading.Thread(target=self._load_competition_catalog, daemon=True).start()
+
+    def _load_competition_catalog(self):
+        sports = self.client.get_available_sports(include_inactive=True)
+        if not sports:
+            self.after(0, self._show_fallback_catalog_status)
+            return
+
+        # Merge the server response into the fallback so marquee competitions
+        # such as the World Cup remain selectable while they are off-season.
+        catalog = {
+            sport: {name: config.copy() for name, config in competitions.items()}
+            for sport, competitions in self.FALLBACK_COMPETITIONS.items()
+        }
+        for item in sports:
+            key = item.get("key")
+            title = item.get("title")
+            group = item.get("group") or "Other"
+            if not key or not title or item.get("has_outrights"):
+                continue
+            catalog.setdefault(group, {})[title] = {
+                "key": key,
+                "region": self.region_for_group(group),
+                "active": item.get("active", False),
+                "description": item.get("description", ""),
+            }
+
+        if catalog:
+            self.after(0, lambda: self._apply_competition_catalog(catalog))
+        else:
+            self.after(0, self._show_fallback_catalog_status)
+
+    def _apply_competition_catalog(self, catalog):
+        self.competition_catalog = catalog
+        sports = sorted(catalog)
+        self.sport_dropdown.configure(values=sports)
+        selected_sport = "Soccer" if "Soccer" in catalog else sports[0]
+        self.sport_dropdown.set(selected_sport)
+        self.on_sport_changed(selected_sport)
+        competition_count = sum(len(items) for items in catalog.values())
+        self.catalog_status.configure(
+            text=f"{competition_count} competitions loaded across {len(sports)} sports"
+        )
+
+    def _show_fallback_catalog_status(self):
+        self.catalog_status.configure(text="Using built-in competitions (online catalog unavailable)")
 
     def write_to_terminal(self, text):
         """Thread-safe injection of text to terminal box interface."""
+        if threading.current_thread() is not threading.main_thread():
+            self.after(0, lambda: self.write_to_terminal(text))
+            return
         self.terminal_box.configure(state="normal")
         self.terminal_box.insert(tk.END, text + "\n")
         self.terminal_box.see(tk.END)
@@ -92,18 +200,25 @@ class GamblerBotGUI(ctk.CTk):
 
     def start_async_scan(self):
         """Fires the scanning function in a background thread to keep UI alive."""
+        selected_sport = self.sport_dropdown.get()
+        selected_competition = self.competition_dropdown.get()
+        sport_config = self.competition_catalog.get(selected_sport, {}).get(selected_competition)
+        if not sport_config:
+            self.write_to_terminal("[-] Choose a valid competition before scanning.")
+            return
         self.scan_button.configure(state="disabled", text="Scanning...")
-        threading.Thread(target=self.run_market_scan_pipeline, daemon=True).start()
+        threading.Thread(
+            target=self.run_market_scan_pipeline,
+            args=(selected_competition, sport_config),
+            daemon=True,
+        ).start()
 
-    def run_market_scan_pipeline(self):
+    def run_market_scan_pipeline(self, selected_competition, sport_config):
         try:
-            selected_display_name = self.sport_dropdown.get()
-            sport_config = self.SPORT_MARKETS[selected_display_name]
-            
             api_sport_key = sport_config["key"]
             api_region = sport_config["region"]
 
-            self.write_to_terminal(f"[*] Target adjusted to: {selected_display_name}")
+            self.write_to_terminal(f"[*] Target adjusted to: {selected_competition}")
             self.write_to_terminal(f"[*] Contacting odds servers for key: '{api_sport_key}'...")
             
             raw_events = self.client.get_upcoming_matches(
@@ -134,7 +249,7 @@ class GamblerBotGUI(ctk.CTk):
         except Exception as e:
             self.write_to_terminal(f"[!] Critical structural failure: {str(e)}")
         finally:
-            self.scan_button.configure(state="normal", text="Scan Market")
+            self.after(0, lambda: self.scan_button.configure(state="normal", text="Scan Market"))
 
     def evaluate_gui_discrepancies(self, df):
         """Processes flattened datasets inside class scope, utilizing Implied Probability Edges."""
