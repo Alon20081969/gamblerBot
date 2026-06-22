@@ -17,14 +17,16 @@ class MarketAnalyzer:
         if not isinstance(venue, dict):
             venue = {'name': str(venue)}
         stadium = (
-            raw_event_data.get('stadium')
-            or raw_event_data.get('venue_name')
-            or venue.get('name')
+            raw_event_data.get('stadium', '')
+            or raw_event_data.get('venue_name', '')
+            or venue.get('name', '')
+            or 'Venue not supplied'
         )
         country = (
-            raw_event_data.get('country')
-            or raw_event_data.get('sport_country')
-            or venue.get('country')
+            raw_event_data.get('country', '')
+            or raw_event_data.get('sport_country', '')
+            or venue.get('country', '')
+            or 'Country not supplied'
         )
         
         for bookmaker in raw_event_data.get('bookmakers', []):

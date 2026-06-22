@@ -615,7 +615,12 @@ class GamblerBotGUI(ctk.CTk):
     @staticmethod
     def metadata_value(value):
         """Return a readable venue value without exposing pandas NaN values."""
-        return str(value) if pd.notna(value) and str(value).strip() else "Not provided by odds API"
+        if value is None:
+            return "Not provided by odds API"
+        text = str(value).strip()
+        if not text or text.casefold() in {"none", "nan", "nat", "<na>"}:
+            return "Not provided by odds API"
+        return text
 
     @staticmethod
     def format_jerusalem_time(value):
