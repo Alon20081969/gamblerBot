@@ -113,12 +113,26 @@ class GamblerBotGUI(ctk.CTk):
         self.log_frame = ctk.CTkFrame(self.content_frame)
         self.log_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
 
+        self.log_header = ctk.CTkFrame(self.log_frame, fg_color="transparent")
+        self.log_header.pack(fill="x", padx=15, pady=(10, 5))
+
         self.log_label = ctk.CTkLabel(
-            self.log_frame, 
+            self.log_header,
             text="Console Feed", 
             font=ctk.CTkFont(size=12, weight="bold")
         )
-        self.log_label.pack(anchor="w", padx=15, pady=(10, 5))
+        self.log_label.pack(side="left")
+
+        self.clear_button = ctk.CTkButton(
+            self.log_header,
+            text="Clear",
+            command=self.clear_terminal,
+            width=74,
+            height=28,
+            fg_color=("gray70", "gray28"),
+            hover_color=("gray60", "gray35"),
+        )
+        self.clear_button.pack(side="right")
 
         self.terminal_box = ctk.CTkTextbox(
             self.log_frame, 
@@ -289,6 +303,12 @@ class GamblerBotGUI(ctk.CTk):
         self.terminal_box.configure(state="normal")
         self.terminal_box.insert(tk.END, text + "\n")
         self.terminal_box.see(tk.END)
+        self.terminal_box.configure(state="disabled")
+
+    def clear_terminal(self):
+        """Remove all messages from the console feed."""
+        self.terminal_box.configure(state="normal")
+        self.terminal_box.delete("1.0", tk.END)
         self.terminal_box.configure(state="disabled")
 
     def start_async_scan(self):
