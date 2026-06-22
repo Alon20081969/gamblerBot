@@ -18,6 +18,7 @@ class GamblerBotGUI(CompetitionMixin, ResultsMixin, BettingMixin, ctk.CTk):
     """Application shell coordinating the API, worker threads, and UI components."""
 
     FAVORITES_FILE = Path(__file__).resolve().parents[1] / ".gamblerbot_favorites.json"
+    SAVED_SLIPS_FILE = Path(__file__).resolve().parents[1] / ".gamblerbot_saved_slips.json"
     FALLBACK_COMPETITIONS = {
         "Baseball": {"MLB": {"key": "baseball_mlb", "region": "us"}},
         "Basketball": {"NBA": {"key": "basketball_nba", "region": "us"}},
@@ -41,6 +42,7 @@ class GamblerBotGUI(CompetitionMixin, ResultsMixin, BettingMixin, ctk.CTk):
 
         self.client = OddsAPIClient()
         self.favorite_competition_keys = self.load_favorites()
+        self.saved_slips = self.load_saved_slips()
         self.selected_bets = {}
         self.odds_buttons = {}
         self.custom_odd_controls = {}

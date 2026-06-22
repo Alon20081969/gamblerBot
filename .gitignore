@@ -5,3 +5,4 @@ logs/
 data/
 .venv/
 .gamblerbot_favorites.json
+.gamblerbot_saved_slips.json

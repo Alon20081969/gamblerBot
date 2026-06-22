@@ -1,3 +1,4 @@
+import json
 import re
 import tkinter as tk
 
@@ -8,7 +9,7 @@ class BettingMixin:
     """Gamble slip, custom odds, and standalone calculator behavior."""
 
     def build_betting_tabs(self):
-        self.gamble_tab.grid_rowconfigure(1, weight=1)
+        self.gamble_tab.grid_rowconfigure(2, weight=1)
         self.gamble_tab.grid_columnconfigure(0, weight=1)
         slip_header = ctk.CTkFrame(self.gamble_tab, fg_color="transparent")
         slip_header.grid(row=0, column=0, sticky="ew", padx=8, pady=(6, 8))
@@ -22,14 +23,48 @@ class BettingMixin:
             hover_color=("gray60", "gray35"),
         ).pack(side="right")
 
+        saved_controls = ctk.CTkFrame(self.gamble_tab, fg_color="transparent")
+        saved_controls.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 8))
+        saved_controls.grid_columnconfigure(0, weight=1)
+        saved_controls.grid_columnconfigure(2, weight=1)
+        self.slip_name_entry = ctk.CTkEntry(
+            saved_controls, placeholder_text="Name this slip..."
+        )
+        self.slip_name_entry.grid(row=0, column=0, sticky="ew", padx=(0, 5))
+        self.slip_name_entry.bind("<Return>", lambda _event: self.save_named_slip())
+        ctk.CTkButton(
+            saved_controls, text="Save", command=self.save_named_slip, width=58
+        ).grid(row=0, column=1, padx=(0, 10))
+        saved_names = sorted(self.saved_slips) or ["No saved slips"]
+        self.saved_slips_dropdown = ctk.CTkComboBox(
+            saved_controls, values=saved_names, state="readonly", width=145
+        )
+        self.saved_slips_dropdown.set(saved_names[0])
+        self.saved_slips_dropdown.grid(row=0, column=2, sticky="ew", padx=(0, 5))
+        ctk.CTkButton(
+            saved_controls, text="Load", command=self.load_named_slip, width=55
+        ).grid(row=0, column=3, padx=(0, 5))
+        ctk.CTkButton(
+            saved_controls, text="Delete", command=self.delete_named_slip,
+            width=58, fg_color=("#b65d5d", "#8f3333"),
+            hover_color=("#9f4646", "#a94444"),
+        ).grid(row=0, column=4)
+        self.saved_slip_status = ctk.CTkLabel(
+            saved_controls, text="", anchor="w",
+            text_color=("gray45", "gray65"), font=ctk.CTkFont(size=10),
+        )
+        self.saved_slip_status.grid(
+            row=1, column=0, columnspan=5, sticky="ew", pady=(3, 0)
+        )
+
         self.bet_slip_results = ctk.CTkScrollableFrame(
             self.gamble_tab, fg_color=("gray90", "gray14")
         )
-        self.bet_slip_results.grid(row=1, column=0, sticky="nsew", padx=4, pady=(0, 8))
+        self.bet_slip_results.grid(row=2, column=0, sticky="nsew", padx=4, pady=(0, 8))
         self.bet_slip_results.grid_columnconfigure(0, weight=1)
 
         totals = ctk.CTkFrame(self.gamble_tab)
-        totals.grid(row=2, column=0, sticky="ew", padx=4, pady=(0, 4))
+        totals.grid(row=3, column=0, sticky="ew", padx=4, pady=(0, 4))
         totals.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(totals, text="Stake amount:").grid(
             row=0, column=0, sticky="w", padx=12, pady=(10, 5)
@@ -49,6 +84,129 @@ class BettingMixin:
         ).grid(row=4, column=0, columnspan=2, sticky="w", padx=12, pady=(3, 10))
         self.render_bet_slip()
         self._build_calculator_tab()
+
+    def load_saved_slips(self):
+        """Load and validate named Gamble slips from local storage."""
+        try:
+            data = json.loads(self.SAVED_SLIPS_FILE.read_text(encoding="utf-8"))
+            raw_slips = data.get("slips", {}) if isinstance(data, dict) else {}
+        except (FileNotFoundError, OSError, ValueError, TypeError):
+            return {}
+
+        slips = {}
+        for name, payload in raw_slips.items():
+            if not isinstance(name, str) or not isinstance(payload, dict):
+                continue
+            valid_bets = []
+            for bet in payload.get("bets", []):
+                if (
+                    not isinstance(bet, dict)
+                    or not isinstance(bet.get("identity"), list)
+                    or len(bet["identity"]) != 3
+                ):
+                    continue
+                try:
+                    odds = float(bet["odds"])
+                    if odds <= 1.0:
+                        continue
+                    valid_bets.append({
+                        "identity": tuple(str(part) for part in bet["identity"]),
+                        "match": str(bet["match"]),
+                        "selection": str(bet["selection"]),
+                        "bookmaker": str(bet["bookmaker"]),
+                        "odds": odds,
+                    })
+                except (KeyError, TypeError, ValueError):
+                    continue
+            if valid_bets:
+                slips[name] = {
+                    "stake": str(payload.get("stake", "")),
+                    "bets": valid_bets,
+                }
+        return slips
+
+    def persist_saved_slips(self):
+        payload = {
+            "slips": {
+                name: {
+                    "stake": slip.get("stake", ""),
+                    "bets": [
+                        {**bet, "identity": list(bet["identity"])}
+                        for bet in slip.get("bets", [])
+                    ],
+                }
+                for name, slip in sorted(self.saved_slips.items())
+            }
+        }
+        try:
+            self.SAVED_SLIPS_FILE.write_text(
+                json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            return True
+        except OSError as exc:
+            self.write_to_terminal(f"[!] Could not save Gamble slips: {exc}")
+            return False
+
+    def refresh_saved_slips_dropdown(self, selected_name=None):
+        names = sorted(self.saved_slips) or ["No saved slips"]
+        self.saved_slips_dropdown.configure(values=names)
+        self.saved_slips_dropdown.set(
+            selected_name if selected_name in self.saved_slips else names[0]
+        )
+
+    def save_named_slip(self):
+        name = self.slip_name_entry.get().strip()
+        if not name:
+            self.saved_slip_status.configure(text="Enter a name for the slip.")
+            return
+        if not self.selected_bets:
+            self.saved_slip_status.configure(text="Add at least one selection before saving.")
+            return
+        bets = [
+            {**bet, "identity": tuple(bet["identity"])}
+            for bet in self.selected_bets.values()
+        ]
+        existed = name in self.saved_slips
+        self.saved_slips[name] = {"stake": self.stake_entry.get().strip(), "bets": bets}
+        if self.persist_saved_slips():
+            self.refresh_saved_slips_dropdown(name)
+            self.saved_slip_status.configure(
+                text=f"{'Updated' if existed else 'Saved'}: {name}"
+            )
+
+    def load_named_slip(self):
+        name = self.saved_slips_dropdown.get()
+        slip = self.saved_slips.get(name)
+        if not slip:
+            self.saved_slip_status.configure(text="Choose a saved slip to load.")
+            return
+        restored = {}
+        for bet in slip["bets"]:
+            copied = {**bet, "identity": tuple(bet["identity"]), "odds": float(bet["odds"])}
+            restored[copied["identity"][0]] = copied
+        self.selected_bets = restored
+        self.stake_entry.delete(0, tk.END)
+        if slip.get("stake"):
+            self.stake_entry.insert(0, slip["stake"])
+        self.update_odds_button_styles()
+        for event_key in list(self.custom_odd_controls):
+            bet = self.selected_bets.get(event_key)
+            self.set_custom_odd_status(
+                event_key, bool(bet and bet.get("bookmaker") == "Custom odd")
+            )
+        self.render_bet_slip()
+        self.saved_slip_status.configure(text=f"Loaded: {name}")
+
+    def delete_named_slip(self):
+        name = self.saved_slips_dropdown.get()
+        if name not in self.saved_slips:
+            self.saved_slip_status.configure(text="Choose a saved slip to delete.")
+            return
+        del self.saved_slips[name]
+        if self.persist_saved_slips():
+            self.refresh_saved_slips_dropdown()
+            self.saved_slip_status.configure(text=f"Deleted: {name}")
 
     def _build_calculator_tab(self):
         self.calculator_tab.grid_columnconfigure(0, weight=1)
