@@ -103,9 +103,15 @@ class GamblerBotGUI(ctk.CTk):
         )
         self.catalog_status.grid(row=2, column=0, columnspan=5, sticky="w", padx=20, pady=(0, 9))
 
+        # --- Main Content Area ---
+        self.content_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.content_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self.content_frame.grid_rowconfigure(0, weight=1)
+        self.content_frame.grid_columnconfigure(0, weight=1)
+
         # --- Console Feed Text Pane ---
-        self.log_frame = ctk.CTkFrame(self)
-        self.log_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self.log_frame = ctk.CTkFrame(self.content_frame)
+        self.log_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
 
         self.log_label = ctk.CTkLabel(
             self.log_frame, 
@@ -121,6 +127,46 @@ class GamblerBotGUI(ctk.CTk):
             wrap="word"
         )
         self.terminal_box.pack(fill="both", expand=True, padx=15, pady=(0, 15))
+
+        # --- Searchable Competition Browser ---
+        self.browser_frame = ctk.CTkFrame(self.content_frame, width=300)
+        self.browser_frame.grid(row=0, column=1, sticky="ns")
+        self.browser_frame.grid_propagate(False)
+        self.browser_frame.grid_rowconfigure(3, weight=1)
+        self.browser_frame.grid_columnconfigure(0, weight=1)
+
+        self.browser_title = ctk.CTkLabel(
+            self.browser_frame,
+            text="Browse competitions",
+            font=ctk.CTkFont(size=14, weight="bold"),
+        )
+        self.browser_title.grid(row=0, column=0, sticky="w", padx=15, pady=(14, 8))
+
+        self.competition_search = ctk.CTkEntry(
+            self.browser_frame,
+            placeholder_text="Search competitions...",
+        )
+        self.competition_search.grid(row=1, column=0, sticky="ew", padx=15, pady=(0, 6))
+        self.competition_search.bind("<KeyRelease>", self.filter_competitions)
+
+        self.search_result_count = ctk.CTkLabel(
+            self.browser_frame,
+            text="",
+            anchor="w",
+            text_color=("gray45", "gray65"),
+            font=ctk.CTkFont(size=11),
+        )
+        self.search_result_count.grid(row=2, column=0, sticky="ew", padx=15, pady=(0, 5))
+
+        # CTkScrollableFrame supplies the vertical bar on its right edge.
+        self.competition_results = ctk.CTkScrollableFrame(
+            self.browser_frame,
+            label_text="",
+            fg_color=("gray88", "gray17"),
+        )
+        self.competition_results.grid(row=3, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        self.competition_results.grid_columnconfigure(0, weight=1)
+        self.populate_competition_browser()
         
         self.write_to_terminal("System Ready. Select a sport and competition, then click 'Scan Market'...\n")
 
@@ -138,6 +184,53 @@ class GamblerBotGUI(ctk.CTk):
         competitions = sorted(self.competition_catalog.get(selected_sport, {}))
         self.competition_dropdown.configure(values=competitions)
         self.competition_dropdown.set(competitions[0] if competitions else "No competitions available")
+        if hasattr(self, "competition_search"):
+            self.competition_search.delete(0, tk.END)
+            self.populate_competition_browser()
+
+    def filter_competitions(self, _event=None):
+        self.populate_competition_browser(self.competition_search.get())
+
+    def populate_competition_browser(self, query=""):
+        """Render filtered competition buttons inside the scrollable sidebar."""
+        for widget in self.competition_results.winfo_children():
+            widget.destroy()
+
+        selected_sport = self.sport_dropdown.get()
+        competitions = sorted(self.competition_catalog.get(selected_sport, {}))
+        search_term = query.strip().casefold()
+        matches = [name for name in competitions if search_term in name.casefold()]
+
+        self.search_result_count.configure(
+            text=f"{len(matches)} competition{'s' if len(matches) != 1 else ''}"
+        )
+
+        if not matches:
+            empty_label = ctk.CTkLabel(
+                self.competition_results,
+                text="No competitions found",
+                text_color=("gray45", "gray65"),
+            )
+            empty_label.grid(row=0, column=0, sticky="ew", padx=8, pady=16)
+            return
+
+        for row, competition in enumerate(matches):
+            button = ctk.CTkButton(
+                self.competition_results,
+                text=competition,
+                anchor="w",
+                fg_color="transparent",
+                border_width=1,
+                border_color=("gray70", "gray30"),
+                text_color=("gray10", "gray90"),
+                hover_color=("gray78", "gray25"),
+                command=lambda name=competition: self.select_competition(name),
+            )
+            button.grid(row=row, column=0, sticky="ew", padx=3, pady=3)
+
+    def select_competition(self, competition):
+        self.competition_dropdown.set(competition)
+        self.catalog_status.configure(text=f"Selected: {competition}")
 
     def refresh_competition_catalog(self):
         """Load every competition exposed by the odds provider without freezing the UI."""
