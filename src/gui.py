@@ -1,5 +1,7 @@
+import json
 import threading
 import tkinter as tk
+from pathlib import Path
 import customtkinter as ctk
 import pandas as pd
 from src.ingestion.api_client import OddsAPIClient
@@ -9,6 +11,8 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 class GamblerBotGUI(ctk.CTk):
+    FAVORITES_FILE = Path(__file__).resolve().parents[1] / ".gamblerbot_favorites.json"
+
     # Used immediately at startup and whenever the catalog endpoint is unavailable.
     # The live API catalog is merged into this data after the window opens.
     FALLBACK_COMPETITIONS = {
@@ -36,6 +40,7 @@ class GamblerBotGUI(ctk.CTk):
         self.minsize(900, 560)
 
         self.client = OddsAPIClient()
+        self.favorite_competition_keys = self.load_favorites()
 
         self.competition_catalog = {
             sport: {name: config.copy() for name, config in competitions.items()}
@@ -228,7 +233,7 @@ class GamblerBotGUI(ctk.CTk):
         return "us"
 
     def on_sport_changed(self, selected_sport):
-        competitions = sorted(self.competition_catalog.get(selected_sport, {}))
+        competitions = self.sorted_competitions(selected_sport)
         self.competition_dropdown.configure(values=competitions)
         self.competition_dropdown.set(competitions[0] if competitions else "No competitions available")
         if hasattr(self, "competition_search"):
@@ -244,7 +249,7 @@ class GamblerBotGUI(ctk.CTk):
             widget.destroy()
 
         selected_sport = self.sport_dropdown.get()
-        competitions = sorted(self.competition_catalog.get(selected_sport, {}))
+        competitions = self.sorted_competitions(selected_sport)
         search_term = query.strip().casefold()
         matches = [name for name in competitions if search_term in name.casefold()]
 
@@ -262,8 +267,26 @@ class GamblerBotGUI(ctk.CTk):
             return
 
         for row, competition in enumerate(matches):
+            competition_row = ctk.CTkFrame(self.competition_results, fg_color="transparent")
+            competition_row.grid(row=row, column=0, sticky="ew", padx=3, pady=3)
+            competition_row.grid_columnconfigure(1, weight=1)
+
+            competition_key = self.competition_catalog[selected_sport][competition]["key"]
+            is_favorite = competition_key in self.favorite_competition_keys
+            star_button = ctk.CTkButton(
+                competition_row,
+                text="★" if is_favorite else "☆",
+                width=34,
+                fg_color="transparent",
+                hover_color=("gray78", "gray25"),
+                text_color="#f2b632" if is_favorite else ("gray35", "gray70"),
+                font=ctk.CTkFont(size=18),
+                command=lambda name=competition: self.toggle_favorite(name),
+            )
+            star_button.grid(row=0, column=0, padx=(0, 3))
+
             button = ctk.CTkButton(
-                self.competition_results,
+                competition_row,
                 text=competition,
                 anchor="w",
                 fg_color="transparent",
@@ -273,11 +296,65 @@ class GamblerBotGUI(ctk.CTk):
                 hover_color=("gray78", "gray25"),
                 command=lambda name=competition: self.select_competition(name),
             )
-            button.grid(row=row, column=0, sticky="ew", padx=3, pady=3)
+            button.grid(row=0, column=1, sticky="ew")
 
     def select_competition(self, competition):
         self.competition_dropdown.set(competition)
         self.catalog_status.configure(text=f"Selected: {competition}")
+
+    def sorted_competitions(self, sport):
+        """Return favorites first, followed by all other competitions alphabetically."""
+        competitions = self.competition_catalog.get(sport, {})
+        return sorted(
+            competitions,
+            key=lambda name: (
+                competitions[name].get("key") not in self.favorite_competition_keys,
+                name.casefold(),
+            ),
+        )
+
+    def toggle_favorite(self, competition):
+        sport = self.sport_dropdown.get()
+        config = self.competition_catalog.get(sport, {}).get(competition)
+        if not config:
+            return
+
+        competition_key = config["key"]
+        if competition_key in self.favorite_competition_keys:
+            self.favorite_competition_keys.remove(competition_key)
+            action = "Removed from favorites"
+        else:
+            self.favorite_competition_keys.add(competition_key)
+            action = "Added to favorites"
+
+        self.save_favorites()
+        current_selection = self.competition_dropdown.get()
+        ordered = self.sorted_competitions(sport)
+        self.competition_dropdown.configure(values=ordered)
+        if current_selection in ordered:
+            self.competition_dropdown.set(current_selection)
+        self.populate_competition_browser(self.competition_search.get())
+        self.catalog_status.configure(text=f"{action}: {competition}")
+
+    def load_favorites(self):
+        """Load favorite API competition keys from the local settings file."""
+        try:
+            data = json.loads(self.FAVORITES_FILE.read_text(encoding="utf-8"))
+            keys = data.get("competition_keys", []) if isinstance(data, dict) else data
+            return {str(key) for key in keys}
+        except (FileNotFoundError, OSError, ValueError, TypeError):
+            return set()
+
+    def save_favorites(self):
+        """Persist favorites so they survive application restarts."""
+        payload = {"competition_keys": sorted(self.favorite_competition_keys)}
+        try:
+            self.FAVORITES_FILE.write_text(
+                json.dumps(payload, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            self.write_to_terminal(f"[!] Could not save favorites: {exc}")
 
     def refresh_competition_catalog(self):
         """Load every competition exposed by the odds provider without freezing the UI."""
