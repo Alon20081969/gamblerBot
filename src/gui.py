@@ -56,7 +56,17 @@ class GamblerBotGUI(ctk.CTk):
             text="GamblerBot Dashboard", 
             font=ctk.CTkFont(size=18, weight="bold")
         )
-        self.title_label.grid(row=0, column=0, columnspan=5, sticky="w", padx=20, pady=(12, 5))
+        self.title_label.grid(row=0, column=0, columnspan=3, sticky="w", padx=20, pady=(12, 5))
+
+        self.quota_label = ctk.CTkLabel(
+            self.top_frame,
+            text="API credits: loading...",
+            text_color=("gray35", "gray70"),
+            font=ctk.CTkFont(size=11, weight="bold"),
+        )
+        self.quota_label.grid(
+            row=0, column=3, columnspan=2, sticky="e", padx=20, pady=(12, 5)
+        )
 
         # --- Sport Selector Dropdown ---
         self.sport_label = ctk.CTkLabel(self.top_frame, text="Sport:", font=ctk.CTkFont(size=12))
@@ -252,6 +262,7 @@ class GamblerBotGUI(ctk.CTk):
 
     def _load_competition_catalog(self):
         sports = self.client.get_available_sports(include_inactive=True)
+        self.after(0, self.refresh_quota_display)
         if not sports:
             self.after(0, self._show_fallback_catalog_status)
             return
@@ -294,6 +305,23 @@ class GamblerBotGUI(ctk.CTk):
 
     def _show_fallback_catalog_status(self):
         self.catalog_status.configure(text="Using built-in competitions (online catalog unavailable)")
+
+    def refresh_quota_display(self):
+        """Show API request-credit usage from the most recent server response."""
+        usage = self.client.usage
+        remaining = usage.get("remaining")
+        used = usage.get("used")
+        last = usage.get("last")
+        if remaining is None:
+            self.quota_label.configure(text="API credits: unavailable")
+            return
+
+        text = f"API credits: {remaining} remaining"
+        if used is not None:
+            text += f"  |  {used} used"
+        if last is not None:
+            text += f"  |  last scan cost {last}"
+        self.quota_label.configure(text=text)
 
     def write_to_terminal(self, text):
         """Thread-safe injection of text to terminal box interface."""
@@ -362,11 +390,18 @@ class GamblerBotGUI(ctk.CTk):
         except Exception as e:
             self.write_to_terminal(f"[!] Critical structural failure: {str(e)}")
         finally:
+            self.after(0, self.refresh_quota_display)
             self.after(0, lambda: self.scan_button.configure(state="normal", text="Scan Market"))
 
     def evaluate_gui_discrepancies(self, df):
         """Processes flattened datasets inside class scope, utilizing Implied Probability Edges."""
         self.write_to_terminal("\n=== SCAN RESULTS ===")
+        self.write_to_terminal(
+            "How to read these results:\n"
+            "  Typical market odds = the middle price across all bookmakers.\n"
+            "  Price advantage = how much better this offer looks than that typical price.\n"
+            "  This is a market comparison, not a guarantee that the bet will win.\n"
+        )
         found_any = False
         
         # Define the minimum theoretical edge we care about (e.g., 2% absolute probability edge)
@@ -389,29 +424,52 @@ class GamblerBotGUI(ctk.CTk):
                 prob_bookie_home = 1 / row['home_odds']
                 edge_home = prob_market_home - prob_bookie_home
                 if edge_home >= MIN_PROBABILITY_EDGE:
-                    self.write_to_terminal(f"[!] VALUE ALERT | {row['home_team']} vs {row['away_team']}\n"
-                                           f"    Bookie: {row['bookmaker']} @ {row['home_odds']} (Consensus Median: {median_home:.2f}) -> Edge: {edge_home*100:.1f}%\n")
+                    self.write_value_result(
+                        home, away, row['home_team'], row['bookmaker'],
+                        row['home_odds'], median_home, edge_home,
+                    )
                     found_any = True
                     
                 # 2. Evaluate Away Team Probability Edge
                 prob_bookie_away = 1 / row['away_odds']
                 edge_away = prob_market_away - prob_bookie_away
                 if edge_away >= MIN_PROBABILITY_EDGE:
-                    self.write_to_terminal(f"[!] VALUE ALERT | {row['away_team']} @ {row['home_team']}\n"
-                                           f"    Bookie: {row['bookmaker']} @ {row['away_odds']} (Consensus Median: {median_away:.2f}) -> Edge: {edge_away*100:.1f}%\n")
+                    self.write_value_result(
+                        home, away, row['away_team'], row['bookmaker'],
+                        row['away_odds'], median_away, edge_away,
+                    )
                     found_any = True
                     
                 # 3. Evaluate Draw Probability Edge
-                if has_draws and row['draw_odds']:
+                if has_draws and pd.notna(row['draw_odds']) and row['draw_odds'] > 0:
                     prob_bookie_draw = 1 / row['draw_odds']
                     edge_draw = prob_market_draw - prob_bookie_draw
                     if edge_draw >= MIN_PROBABILITY_EDGE:
-                        self.write_to_terminal(f"[!] VALUE ALERT | DRAW - {row['home_team']} vs {row['away_team']}\n"
-                                               f"    Bookie: {row['bookmaker']} @ {row['draw_odds']} (Consensus Median: {median_draw:.2f}) -> Edge: {edge_draw*100:.1f}%\n")
+                        self.write_value_result(
+                            home, away, "Draw", row['bookmaker'],
+                            row['draw_odds'], median_draw, edge_draw,
+                        )
                         found_any = True
                         
         if not found_any:
-            self.write_to_terminal("[+] Complete efficiency observed. No math-backed outliers found.")
+            self.write_to_terminal(
+                "[+] No offers were at least 2 percentage points better than the typical market price."
+            )
+
+    def write_value_result(self, home, away, selection, bookmaker, offered_odds,
+                           typical_odds, advantage):
+        """Write one value result using beginner-friendly labels."""
+        self.write_to_terminal(
+            "----------------------------------------\n"
+            "VALUE OPPORTUNITY FOUND\n"
+            f"Match: {home} vs {away}\n"
+            f"Your selection: {selection}\n"
+            f"Bookmaker: {bookmaker}\n"
+            f"Odds offered: {offered_odds:.2f}\n"
+            f"Typical market odds: {typical_odds:.2f}\n"
+            f"Price advantage: +{advantage * 100:.1f} percentage points\n"
+            "Why it was flagged: this bookmaker is offering a better price than most of the market.\n"
+        )
 
 if __name__ == "__main__":
     app = GamblerBotGUI()

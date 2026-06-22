@@ -6,6 +6,15 @@ class OddsAPIClient:
     def __init__(self):
         self.api_key = Config.ODDS_API_KEY
         self.base_url = "https://api.the-odds-api.com/v4/sports"
+        self.usage = {"remaining": None, "used": None, "last": None}
+
+    def _update_usage(self, response):
+        """Capture request-credit information returned by The Odds API."""
+        self.usage = {
+            "remaining": response.headers.get("x-requests-remaining"),
+            "used": response.headers.get("x-requests-used"),
+            "last": response.headers.get("x-requests-last"),
+        }
 
     def get_available_sports(self, include_inactive=True):
         """Return the provider's competition catalog.
@@ -22,6 +31,7 @@ class OddsAPIClient:
 
         try:
             response = requests.get(self.base_url, params=params, timeout=15)
+            self._update_usage(response)
             response.raise_for_status()
             return response.json()
         except (requests.RequestException, ValueError) as exc:
@@ -45,6 +55,7 @@ class OddsAPIClient:
         try:
             print(f"[*] Requesting live lines for sport: {sport}...")
             response = requests.get(url, params=params, timeout=20)
+            self._update_usage(response)
             
             if response.status_code == 200:
                 return response.json()
