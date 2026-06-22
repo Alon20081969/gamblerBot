@@ -567,6 +567,7 @@ class GamblerBotGUI(ctk.CTk):
         metadata = ctk.CTkLabel(
             card,
             text=(
+                f"Home team: {home}   •   Away team: {away}\n"
                 f"Jerusalem time: {kickoff}\n"
                 f"Country: {country}   •   Stadium: {stadium}"
             ),
@@ -582,10 +583,10 @@ class GamblerBotGUI(ctk.CTk):
         summary.grid_columnconfigure(1, weight=1)
         summary.grid_columnconfigure(2, weight=1)
 
-        selections = [(home, 'home_odds')]
+        selections = [(f"Home — {home}", 'home_odds')]
         if 'draw_odds' in game_df and game_df['draw_odds'].notna().any():
             selections.append(("Draw", 'draw_odds'))
-        selections.append((away, 'away_odds'))
+        selections.append((f"Away — {away}", 'away_odds'))
 
         for selection_row, (selection, column) in enumerate(selections):
             valid = game_df.dropna(subset=[column])
@@ -639,10 +640,10 @@ class GamblerBotGUI(ctk.CTk):
     def populate_bookmaker_details(self, details, home, away, game_df):
         """Build the full odds table hidden beneath an expandable game card."""
         has_draw = 'draw_odds' in game_df and game_df['draw_odds'].notna().any()
-        columns = [("Bookmaker", None), (home, 'home_odds')]
+        columns = [("Bookmaker", None), (f"Home — {home}", 'home_odds')]
         if has_draw:
             columns.append(("Draw", 'draw_odds'))
-        columns.append((away, 'away_odds'))
+        columns.append((f"Away — {away}", 'away_odds'))
 
         for column_index, (heading, _) in enumerate(columns):
             details.grid_columnconfigure(column_index, weight=1)
