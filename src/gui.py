@@ -109,7 +109,7 @@ class GamblerBotGUI(
 
     def create_widgets(self):
         self.page_names = [
-            "Competitions", "Results", "Bet Slip", "Calculator",
+            "Competitions", "Results", "Best", "Bet Slip", "Calculator",
             "History", "Console", "Settings",
         ]
         self._build_top_controls()
@@ -136,6 +136,7 @@ class GamblerBotGUI(
             self.pages[page_name] = page
         self.competitions_tab = self.pages["Competitions"]
         self.results_tab = self.pages["Results"]
+        self.best_tab = self.pages["Best"]
         self.gamble_tab = self.pages["Bet Slip"]
         self.calculator_tab = self.pages["Calculator"]
         self.history_tab = self.pages["History"]
@@ -197,10 +198,11 @@ class GamblerBotGUI(
         nav_frame.grid(row=0, column=1, columnspan=5, sticky="w", pady=(9, 6))
         self.nav_buttons = {}
         nav_labels = {
-            "Competitions": "Competitions",
+            "Competitions": "Leagues",
             "Results": "Results",
-            "Bet Slip": "Bet Slip",
-            "Calculator": "Calculator",
+            "Best": "Best",
+            "Bet Slip": "Slip",
+            "Calculator": "Calc",
             "History": "History",
             "Console": "Console",
             "Settings": "Settings",
@@ -210,7 +212,7 @@ class GamblerBotGUI(
                 nav_frame,
                 text=nav_labels[page_name],
                 command=lambda name=page_name: self.show_page(name),
-                width=92,
+                width=84,
                 height=30,
                 corner_radius=8,
                 fg_color="transparent",

@@ -5,6 +5,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import customtkinter as ctk
 import pandas as pd
 
+from src.models.probabilities import MarketAnalyzer
+
 
 class ResultsMixin:
     """Searchable, incrementally rendered game cards and bookmaker details."""
@@ -64,6 +66,65 @@ class ResultsMixin:
         self.game_results.grid(row=2, column=0, sticky="nsew", padx=4, pady=(0, 4))
         self.game_results.grid_columnconfigure(0, weight=1)
         self.show_results_message("Scan a competition to see its games here.")
+        self.build_best_opportunities_tab()
+
+    def build_best_opportunities_tab(self):
+        self.best_tab.grid_rowconfigure(2, weight=1)
+        self.best_tab.grid_columnconfigure(0, weight=1)
+        header = ctk.CTkFrame(self.best_tab, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=8, pady=(6, 8))
+        self.best_title = ctk.CTkLabel(
+            header,
+            text="Best opportunities",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color=self.COLORS["text"],
+        )
+        self.best_title.pack(side="left")
+        ctk.CTkButton(
+            header,
+            text="Open Results",
+            command=lambda: self.show_page("Results"),
+            width=112,
+            height=34,
+            fg_color=self.COLORS["accent"],
+            hover_color=self.COLORS["accent_hover"],
+        ).pack(side="right")
+        self.best_sort_dropdown = ctk.CTkComboBox(
+            header,
+            values=["Highest score first", "Lowest score first"],
+            state="readonly",
+            width=180,
+            height=34,
+            fg_color=self.COLORS["panel_alt"],
+            border_color=self.COLORS["border_light"],
+            button_color=self.COLORS["border_light"],
+            button_hover_color=self.COLORS["accent"],
+            command=lambda _value: self.rerender_best_opportunities(),
+        )
+        self.best_sort_dropdown.set("Highest score first")
+        self.best_sort_dropdown.pack(side="right", padx=(0, 8))
+        self.best_status = ctk.CTkLabel(
+            self.best_tab,
+            text=(
+                "Leaderboard shows every outcome candidate from the latest scan. "
+                "Sort by high or low opportunity score. "
+                "It is a price signal, not a prediction."
+            ),
+            anchor="w",
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=10),
+        )
+        self.best_status.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 6))
+        self.best_results = ctk.CTkScrollableFrame(
+            self.best_tab,
+            fg_color=self.COLORS["panel_soft"],
+            corner_radius=12,
+            border_width=1,
+            border_color=self.COLORS["border"],
+        )
+        self.best_results.grid(row=2, column=0, sticky="nsew", padx=4, pady=(0, 4))
+        self.best_results.grid_columnconfigure(0, weight=1)
+        self.show_best_opportunities_message("Scan a competition to rank opportunities.")
 
     def show_results_message(self, message):
         self.results_generation += 1
@@ -76,6 +137,22 @@ class ResultsMixin:
             self.game_results, text=message, text_color=("gray40", "gray65"),
             wraplength=500,
         ).grid(row=0, column=0, sticky="ew", padx=20, pady=30)
+        if hasattr(self, "best_results"):
+            self.show_best_opportunities_message("Scan a competition to rank opportunities.")
+
+    def show_best_opportunities_message(self, message):
+        for widget in self.best_results.winfo_children():
+            widget.destroy()
+        ctk.CTkLabel(
+            self.best_results,
+            text=message,
+            text_color=("gray40", "gray65"),
+            wraplength=620,
+        ).grid(row=0, column=0, sticky="ew", padx=20, pady=30)
+
+    def rerender_best_opportunities(self):
+        if self.latest_results_df is not None:
+            self.render_best_opportunities(self.latest_results_df)
 
     def display_game_results(self, df):
         self.capture_odds_movements(df)
@@ -85,6 +162,86 @@ class ResultsMixin:
             self.result_search_after_id = None
         self.result_search_entry.delete(0, tk.END)
         self.render_filtered_game_results()
+        self.render_best_opportunities(df)
+
+    def render_best_opportunities(self, df):
+        if not hasattr(self, "best_results"):
+            return
+        for widget in self.best_results.winfo_children():
+            widget.destroy()
+        opportunities = MarketAnalyzer.find_discrepancies(df, minimum_spread_pct=0)
+        if opportunities.empty:
+            self.best_title.configure(text="Best opportunities - 0")
+            self.show_best_opportunities_message(
+                "No opportunity data is available for this scan."
+            )
+            return
+        sort_lowest_first = (
+            hasattr(self, "best_sort_dropdown")
+            and self.best_sort_dropdown.get() == "Lowest score first"
+        )
+        opportunities = opportunities.sort_values(
+            ["opportunity_score", "spread_pct"],
+            ascending=[sort_lowest_first, sort_lowest_first],
+        )
+        direction = "lowest first" if sort_lowest_first else "highest first"
+        self.best_title.configure(
+            text=f"Best opportunities - {len(opportunities)} shown ({direction})"
+        )
+        for rank, (_, row) in enumerate(opportunities.iterrows(), start=1):
+            self.create_opportunity_card(rank, row)
+
+    def create_opportunity_card(self, rank, row):
+        score = float(row.get("opportunity_score") or 0)
+        color = (
+            self.COLORS["success"] if score >= 8
+            else self.COLORS["warning"] if score >= 4
+            else self.COLORS["muted"]
+        )
+        card = ctk.CTkFrame(
+            self.best_results,
+            corner_radius=12,
+            fg_color=self.COLORS["panel"],
+            border_width=1,
+            border_color=self.COLORS["border"],
+        )
+        card.grid(row=rank - 1, column=0, sticky="ew", padx=8, pady=6)
+        card.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(
+            card,
+            text=f"#{rank}",
+            text_color=color,
+            font=ctk.CTkFont(size=18, weight="bold"),
+            width=52,
+        ).grid(row=0, column=0, rowspan=2, padx=(12, 4), pady=12)
+        ctk.CTkLabel(
+            card,
+            text=f"{row['match']}  •  Bet option: {row['selection']}",
+            text_color=self.COLORS["text"],
+            font=ctk.CTkFont(size=14, weight="bold"),
+            anchor="w",
+        ).grid(row=0, column=1, sticky="ew", padx=8, pady=(12, 2))
+        detail = (
+            f"{row['outcome']} @ {row['best_odds']:.2f} at {row['best_bookmaker']}   |   "
+            f"Market low {row['worst_odds']:.2f} at {row['worst_bookmaker']}   |   "
+            f"Disagreement {self.format_metric(row.get('spread_pct'), '%')}   |   "
+            f"Implied chance {self.format_metric(row.get('best_implied_pct'), '%')}"
+        )
+        ctk.CTkLabel(
+            card,
+            text=detail,
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=11),
+            anchor="w",
+        ).grid(row=1, column=1, sticky="ew", padx=8, pady=(0, 12))
+        ctk.CTkLabel(
+            card,
+            text=f"Score\n{score:.2f}",
+            text_color=color,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            justify="center",
+            width=86,
+        ).grid(row=0, column=2, rowspan=2, padx=12, pady=12)
 
     def capture_odds_movements(self, df):
         """Compare this scan with prior prices from the same session."""
