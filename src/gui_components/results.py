@@ -191,6 +191,43 @@ class ResultsMixin:
         for rank, (_, row) in enumerate(opportunities.iterrows(), start=1):
             self.create_opportunity_card(rank, row)
 
+    def add_opportunity_to_slip(self, row):
+        match = str(row.get("match", "Unknown match"))
+        event_id = row.get("event_id")
+        event_key = str(event_id) if pd.notna(event_id) else match.replace(" vs ", "|")
+        bookmaker = str(row.get("best_bookmaker", "Unknown bookmaker"))
+        odds_column = str(row.get("odds_column", "best_odds"))
+        identity = (event_key, bookmaker, odds_column)
+
+        try:
+            odds = float(row.get("best_odds"))
+        except (TypeError, ValueError):
+            self.write_to_terminal("[!] Could not add leaderboard pick: missing odds.")
+            return
+
+        self.selected_bets[event_key] = {
+            "identity": identity,
+            "match": match,
+            "selection": str(row.get("selection", row.get("outcome", "Selection"))),
+            "bookmaker": bookmaker,
+            "odds": odds,
+        }
+        self.set_custom_odd_status(event_key, False)
+        self.update_odds_button_styles(event_key)
+        self.render_bet_slip()
+        if hasattr(self, "saved_slip_status"):
+            self.saved_slip_status.configure(
+                text=f"Added from Best: {match} - {row.get('selection')} @ {odds:.2f}"
+            )
+        self.show_page("Bet Slip")
+
+    def make_opportunity_card_clickable(self, widget, row):
+        try:
+            widget.configure(cursor="hand2")
+        except (tk.TclError, AttributeError):
+            pass
+        widget.bind("<Button-1>", lambda _event, pick=row: self.add_opportunity_to_slip(pick))
+
     def create_opportunity_card(self, rank, row):
         score = float(row.get("opportunity_score") or 0)
         color = (
@@ -207,41 +244,50 @@ class ResultsMixin:
         )
         card.grid(row=rank - 1, column=0, sticky="ew", padx=8, pady=6)
         card.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(
+        self.make_opportunity_card_clickable(card, row)
+        rank_label = ctk.CTkLabel(
             card,
             text=f"#{rank}",
             text_color=color,
             font=ctk.CTkFont(size=18, weight="bold"),
             width=52,
-        ).grid(row=0, column=0, rowspan=2, padx=(12, 4), pady=12)
-        ctk.CTkLabel(
+        )
+        rank_label.grid(row=0, column=0, rowspan=2, padx=(12, 4), pady=12)
+        self.make_opportunity_card_clickable(rank_label, row)
+        title_label = ctk.CTkLabel(
             card,
             text=f"{row['match']}  •  Bet option: {row['selection']}",
             text_color=self.COLORS["text"],
             font=ctk.CTkFont(size=14, weight="bold"),
             anchor="w",
-        ).grid(row=0, column=1, sticky="ew", padx=8, pady=(12, 2))
+        )
+        title_label.grid(row=0, column=1, sticky="ew", padx=8, pady=(12, 2))
+        self.make_opportunity_card_clickable(title_label, row)
         detail = (
             f"{row['outcome']} @ {row['best_odds']:.2f} at {row['best_bookmaker']}   |   "
             f"Market low {row['worst_odds']:.2f} at {row['worst_bookmaker']}   |   "
             f"Disagreement {self.format_metric(row.get('spread_pct'), '%')}   |   "
             f"Implied chance {self.format_metric(row.get('best_implied_pct'), '%')}"
         )
-        ctk.CTkLabel(
+        detail_label = ctk.CTkLabel(
             card,
             text=detail,
             text_color=self.COLORS["muted"],
             font=ctk.CTkFont(size=11),
             anchor="w",
-        ).grid(row=1, column=1, sticky="ew", padx=8, pady=(0, 12))
-        ctk.CTkLabel(
+        )
+        detail_label.grid(row=1, column=1, sticky="ew", padx=8, pady=(0, 12))
+        self.make_opportunity_card_clickable(detail_label, row)
+        score_label = ctk.CTkLabel(
             card,
             text=f"Score\n{score:.2f}",
             text_color=color,
             font=ctk.CTkFont(size=12, weight="bold"),
             justify="center",
             width=86,
-        ).grid(row=0, column=2, rowspan=2, padx=12, pady=12)
+        )
+        score_label.grid(row=0, column=2, rowspan=2, padx=12, pady=12)
+        self.make_opportunity_card_clickable(score_label, row)
 
     def capture_odds_movements(self, df):
         """Compare this scan with prior prices from the same session."""
