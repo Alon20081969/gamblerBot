@@ -233,6 +233,7 @@ class ResultsMixin:
             selections.append(("Draw", 'draw_odds', "Draw"))
         selections.append((f"Away — {away}", 'away_odds', away))
         for result_row, (label, column, pick) in enumerate(selections):
+            display_row = result_row * 2
             valid = game_df.dropna(subset=[column])
             if valid.empty:
                 continue
@@ -244,7 +245,7 @@ class ResultsMixin:
                 anchor="w",
                 text_color=self.COLORS["text"],
                 font=ctk.CTkFont(size=12, weight="bold"),
-            ).grid(row=result_row, column=0, sticky="w", padx=(0, 12), pady=2)
+            ).grid(row=display_row, column=0, sticky="w", padx=(0, 12), pady=2)
             for col, prefix, odds_row in (
                 (1, "Highest", highest), (2, "Lowest", lowest)
             ):
@@ -255,8 +256,55 @@ class ResultsMixin:
                     bookmaker=str(odds_row['bookmaker']), odds=float(odds_row[column]),
                     odds_column=column,
                 )
-                button.grid(row=result_row, column=col, sticky="ew", padx=6, pady=2)
+                button.grid(row=display_row, column=col, sticky="ew", padx=6, pady=2)
+            stats_text = self.outcome_probability_summary(
+                highest=highest,
+                lowest=lowest,
+                odds_column=column,
+                highest_odds=float(highest[column]),
+                lowest_odds=float(lowest[column]),
+            )
+            ctk.CTkLabel(
+                summary,
+                text=stats_text,
+                anchor="w",
+                justify="left",
+                text_color=self.COLORS["muted"],
+                font=ctk.CTkFont(size=10),
+            ).grid(
+                row=display_row + 1,
+                column=1,
+                columnspan=2,
+                sticky="ew",
+                padx=6,
+                pady=(0, 5),
+            )
         self.build_custom_odd_controls(card, event_key, home, away, has_draw)
+
+    @staticmethod
+    def format_metric(value, suffix="", fallback="n/a"):
+        if pd.isna(value):
+            return fallback
+        try:
+            return f"{float(value):.2f}{suffix}"
+        except (TypeError, ValueError):
+            return fallback
+
+    def outcome_probability_summary(self, highest, lowest, odds_column,
+                                    highest_odds, lowest_odds):
+        prefix = odds_column.replace("_odds", "")
+        implied = highest.get(f"{prefix}_implied_pct")
+        if pd.isna(implied):
+            implied = highest.get(odds_column.replace("_odds", "_implied_pct"))
+        spread = highest.get(f"{prefix}_spread_pct")
+        if pd.isna(spread):
+            spread = ((highest_odds - lowest_odds) / lowest_odds) * 100 if lowest_odds else None
+        score = highest.get(f"{prefix}_opportunity_score")
+        return (
+            f"Implied chance: {self.format_metric(implied, '%')}   |   "
+            f"Bookmaker spread: {self.format_metric(spread, '%')}   |   "
+            f"Opportunity score: {self.format_metric(score)}"
+        )
 
     @staticmethod
     def metadata_value(value):
