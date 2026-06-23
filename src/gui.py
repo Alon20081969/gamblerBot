@@ -19,10 +19,36 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 
+class PageRouter:
+    """Small adapter so older component code can still call self.view_tabs.set(...)."""
+
+    def __init__(self, app):
+        self.app = app
+
+    def set(self, page_name):
+        self.app.show_page(page_name)
+
+
 class GamblerBotGUI(
     CompetitionMixin, ResultsMixin, BettingMixin, HistoryExportMixin, ctk.CTk
 ):
     """Application shell coordinating the API, worker threads, and UI components."""
+
+    COLORS = {
+        "bg": "#0f1724",
+        "panel": "#172131",
+        "panel_alt": "#202c3f",
+        "panel_soft": "#111b2a",
+        "border": "#2d3b50",
+        "border_light": "#41536c",
+        "text": "#f4f7fb",
+        "muted": "#9aa8ba",
+        "accent": "#2f80ed",
+        "accent_hover": "#4d96f4",
+        "success": "#39c47f",
+        "danger": "#d65f5f",
+        "warning": "#f2b632",
+    }
 
     FAVORITES_FILE = Path(__file__).resolve().parents[1] / ".gamblerbot_favorites.json"
     SAVED_SLIPS_FILE = Path(__file__).resolve().parents[1] / ".gamblerbot_saved_slips.json"
@@ -45,8 +71,9 @@ class GamblerBotGUI(
     def __init__(self):
         super().__init__()
         self.title("GamblerBot - Live Market Scanner")
-        self.geometry("1040x650")
-        self.minsize(900, 560)
+        self.geometry("1280x760")
+        self.minsize(1060, 650)
+        self.configure(fg_color=self.COLORS["bg"])
 
         self.client = OddsAPIClient()
         self.favorite_competition_keys = self.load_favorites()
@@ -81,70 +108,149 @@ class GamblerBotGUI(
         self.refresh_competition_catalog()
 
     def create_widgets(self):
+        self.page_names = [
+            "Competitions", "Results", "Bet Slip", "Calculator",
+            "History", "Console", "Settings",
+        ]
         self._build_top_controls()
         self.content_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.content_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self.content_frame.pack(fill="both", expand=True, padx=16, pady=(0, 14))
         self.content_frame.grid_rowconfigure(0, weight=1)
         self.content_frame.grid_columnconfigure(0, weight=1)
 
-        self.log_frame = ctk.CTkFrame(self.content_frame)
-        self.log_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-        self.view_tabs = ctk.CTkTabview(self.log_frame)
-        self.view_tabs.pack(fill="both", expand=True, padx=8, pady=8)
-        self.results_tab = self.view_tabs.add("Results")
-        self.gamble_tab = self.view_tabs.add("Gamble")
-        self.calculator_tab = self.view_tabs.add("Calculator")
-        self.history_tab = self.view_tabs.add("History")
-        self.console_tab = self.view_tabs.add("Console")
+        self.log_frame = ctk.CTkFrame(
+            self.content_frame,
+            fg_color=self.COLORS["panel"],
+            border_width=1,
+            border_color=self.COLORS["border"],
+            corner_radius=14,
+        )
+        self.log_frame.grid(row=0, column=0, sticky="nsew")
+        self.log_frame.grid_rowconfigure(0, weight=1)
+        self.log_frame.grid_columnconfigure(0, weight=1)
+        self.view_tabs = PageRouter(self)
+        self.pages = {}
+        for page_name in self.page_names:
+            page = ctk.CTkFrame(self.log_frame, fg_color="transparent")
+            page.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+            self.pages[page_name] = page
+        self.competitions_tab = self.pages["Competitions"]
+        self.results_tab = self.pages["Results"]
+        self.gamble_tab = self.pages["Bet Slip"]
+        self.calculator_tab = self.pages["Calculator"]
+        self.history_tab = self.pages["History"]
+        self.console_tab = self.pages["Console"]
+        self.settings_tab = self.pages["Settings"]
 
+        self.build_competition_browser(self.competitions_tab)
         self.build_results_tab()
         self.build_betting_tabs()
         self.build_history_tab()
         self._build_console_tab()
-        self.view_tabs.set("Results")
-        self.build_competition_browser(self.content_frame)
+        self._build_settings_tab()
+        self.show_page("Results")
         self.write_to_terminal(
             "System Ready. Select a sport and competition, then click 'Scan Market'...\n"
         )
 
-    def _build_top_controls(self):
-        self.top_frame = ctk.CTkFrame(self, corner_radius=10)
-        self.top_frame.pack(side="top", fill="x", padx=10, pady=10)
+    def show_page(self, page_name):
+        if not hasattr(self, "pages") or page_name not in self.pages:
+            return
+        self.pages[page_name].tkraise()
+        if hasattr(self, "nav_bar"):
+            self.nav_bar.set(page_name)
+
+    def _build_top_controls_legacy(self):
+        self.top_frame = ctk.CTkFrame(
+            self,
+            corner_radius=16,
+            fg_color=self.COLORS["panel"],
+            border_width=1,
+            border_color=self.COLORS["border"],
+        )
+        self.top_frame.pack(side="top", fill="x", padx=16, pady=16)
         self.top_frame.grid_columnconfigure(3, weight=1)
+        brand = ctk.CTkFrame(self.top_frame, fg_color="transparent")
+        brand.grid(row=0, column=0, columnspan=3, sticky="w", padx=22, pady=(18, 6))
         ctk.CTkLabel(
-            self.top_frame, text="GamblerBot Dashboard",
-            font=ctk.CTkFont(size=18, weight="bold"),
-        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=20, pady=(12, 5))
+            brand,
+            text="GamblerBot",
+            font=ctk.CTkFont(size=26, weight="bold"),
+            text_color=self.COLORS["text"],
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            brand,
+            text="Live odds scanner, bet-slip planning, and market movement tracking",
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=12),
+        ).pack(anchor="w", pady=(2, 0))
         self.quota_label = ctk.CTkLabel(
-            self.top_frame, text="API credits: loading...",
-            text_color=("gray35", "gray70"),
+            self.top_frame,
+            text="API credits: loading...",
+            fg_color=self.COLORS["panel_alt"],
+            corner_radius=10,
+            padx=12,
+            pady=7,
+            text_color=self.COLORS["muted"],
             font=ctk.CTkFont(size=11, weight="bold"),
         )
-        self.quota_label.grid(row=0, column=3, columnspan=2, sticky="e", padx=20, pady=(12, 5))
-        ctk.CTkLabel(self.top_frame, text="1. Choose sport:").grid(
+        self.quota_label.grid(row=0, column=3, columnspan=2, sticky="e", padx=22, pady=(18, 6))
+        ctk.CTkLabel(
+            self.top_frame,
+            text="Sport",
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).grid(
             row=1, column=0, sticky="w", padx=(20, 5), pady=(5, 14)
         )
         self.sport_dropdown = ctk.CTkComboBox(
             self.top_frame, values=sorted(self.competition_catalog),
-            command=self.on_sport_changed, width=170, state="readonly",
+            command=self.on_sport_changed, width=190, height=38, state="readonly",
+            fg_color=self.COLORS["panel_alt"],
+            button_color=self.COLORS["border_light"],
+            button_hover_color=self.COLORS["accent"],
+            border_color=self.COLORS["border_light"],
+            dropdown_fg_color=self.COLORS["panel_alt"],
         )
         self.sport_dropdown.set("Soccer")
         self.sport_dropdown.grid(row=1, column=1, sticky="w", padx=5, pady=(5, 14))
-        ctk.CTkLabel(self.top_frame, text="2. Choose competition:").grid(
+        ctk.CTkLabel(
+            self.top_frame,
+            text="Competition",
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).grid(
             row=1, column=2, sticky="w", padx=(18, 5), pady=(5, 14)
         )
         self.competition_dropdown = ctk.CTkComboBox(
-            self.top_frame, values=[], width=260, state="readonly"
+            self.top_frame,
+            values=[],
+            width=330,
+            height=38,
+            state="readonly",
+            fg_color=self.COLORS["panel_alt"],
+            button_color=self.COLORS["border_light"],
+            button_hover_color=self.COLORS["accent"],
+            border_color=self.COLORS["border_light"],
+            dropdown_fg_color=self.COLORS["panel_alt"],
         )
         self.competition_dropdown.grid(row=1, column=3, sticky="w", padx=5, pady=(5, 14))
         self.on_sport_changed("Soccer")
         self.scan_button = ctk.CTkButton(
-            self.top_frame, text="3. Scan odds", command=self.start_async_scan, width=120
+            self.top_frame,
+            text="Scan Market",
+            command=self.start_async_scan,
+            width=160,
+            height=42,
+            corner_radius=10,
+            fg_color=self.COLORS["accent"],
+            hover_color=self.COLORS["accent_hover"],
+            font=ctk.CTkFont(size=14, weight="bold"),
         )
         self.scan_button.grid(row=1, column=4, sticky="e", padx=20, pady=(5, 14))
         self.catalog_status = ctk.CTkLabel(
             self.top_frame, text="Loading competitions...",
-            text_color=("gray45", "gray65"), font=ctk.CTkFont(size=11),
+            text_color=self.COLORS["muted"], font=ctk.CTkFont(size=11),
         )
         self.catalog_status.grid(row=2, column=0, columnspan=2, sticky="w", padx=20, pady=(0, 9))
         ctk.CTkLabel(
@@ -153,16 +259,139 @@ class GamblerBotGUI(
             text_color=("gray40", "gray68"),
             font=ctk.CTkFont(size=11, weight="bold"),
         ).grid(row=2, column=2, columnspan=3, sticky="e", padx=20, pady=(0, 9))
-        self._build_auto_refresh_controls()
 
-    def _build_auto_refresh_controls(self):
-        controls = ctk.CTkFrame(self.top_frame, fg_color="transparent")
-        controls.grid(row=3, column=0, columnspan=5, sticky="ew", padx=20, pady=(0, 10))
-        ctk.CTkLabel(controls, text="Optional auto-scan every").pack(side="left")
+    def _build_top_controls(self):
+        self.top_frame = ctk.CTkFrame(
+            self,
+            corner_radius=0,
+            fg_color=self.COLORS["panel"],
+            border_width=1,
+            border_color=self.COLORS["border"],
+        )
+        self.top_frame.pack(side="top", fill="x")
+        self.top_frame.grid_columnconfigure(1, weight=1)
+        self.top_frame.grid_columnconfigure(4, weight=1)
+
+        ctk.CTkLabel(
+            self.top_frame,
+            text="GamblerBot",
+            font=ctk.CTkFont(size=20, weight="bold"),
+            text_color=self.COLORS["text"],
+        ).grid(row=0, column=0, sticky="w", padx=(14, 10), pady=8)
+
+        self.nav_bar = ctk.CTkSegmentedButton(
+            self.top_frame,
+            values=self.page_names,
+            command=self.show_page,
+            fg_color=self.COLORS["panel_alt"],
+            selected_color=self.COLORS["accent"],
+            selected_hover_color=self.COLORS["accent_hover"],
+            unselected_color=self.COLORS["panel_alt"],
+            unselected_hover_color=self.COLORS["border_light"],
+        )
+        self.nav_bar.grid(row=0, column=1, sticky="ew", padx=(0, 12), pady=8)
+
+        self.sport_dropdown = ctk.CTkComboBox(
+            self.top_frame,
+            values=sorted(self.competition_catalog),
+            command=self.on_sport_changed,
+            width=150,
+            height=34,
+            state="readonly",
+            fg_color=self.COLORS["panel_alt"],
+            button_color=self.COLORS["border_light"],
+            button_hover_color=self.COLORS["accent"],
+            border_color=self.COLORS["border_light"],
+            dropdown_fg_color=self.COLORS["panel_alt"],
+        )
+        self.sport_dropdown.set("Soccer")
+        self.sport_dropdown.grid(row=0, column=2, sticky="e", padx=(0, 8), pady=8)
+
+        self.competition_dropdown = ctk.CTkComboBox(
+            self.top_frame,
+            values=[],
+            width=240,
+            height=34,
+            state="readonly",
+            fg_color=self.COLORS["panel_alt"],
+            button_color=self.COLORS["border_light"],
+            button_hover_color=self.COLORS["accent"],
+            border_color=self.COLORS["border_light"],
+            dropdown_fg_color=self.COLORS["panel_alt"],
+        )
+        self.competition_dropdown.grid(row=0, column=3, sticky="e", padx=(0, 8), pady=8)
+        self.on_sport_changed("Soccer")
+
+        self.scan_button = ctk.CTkButton(
+            self.top_frame,
+            text="Scan",
+            command=self.start_async_scan,
+            width=94,
+            height=34,
+            corner_radius=10,
+            fg_color=self.COLORS["accent"],
+            hover_color=self.COLORS["accent_hover"],
+            font=ctk.CTkFont(size=13, weight="bold"),
+        )
+        self.scan_button.grid(row=0, column=4, sticky="e", padx=(0, 8), pady=8)
+
+        self.quota_label = ctk.CTkLabel(
+            self.top_frame,
+            text="Credits: loading...",
+            fg_color=self.COLORS["panel_alt"],
+            corner_radius=10,
+            padx=10,
+            pady=6,
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=10, weight="bold"),
+        )
+        self.quota_label.grid(row=0, column=5, sticky="e", padx=(0, 14), pady=8)
+
+        self.catalog_status = ctk.CTkLabel(
+            self.top_frame,
+            text="Loading competitions...",
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=10),
+        )
+
+    def _build_settings_tab(self):
+        self.settings_tab.grid_rowconfigure(1, weight=1)
+        self.settings_tab.grid_columnconfigure(0, weight=1)
+        header = ctk.CTkFrame(self.settings_tab, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 8))
+        ctk.CTkLabel(
+            header,
+            text="Settings",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color=self.COLORS["text"],
+        ).pack(side="left")
+        self._build_auto_refresh_controls(self.settings_tab)
+
+    def _build_auto_refresh_controls(self, parent):
+        controls = ctk.CTkFrame(
+            parent,
+            fg_color=self.COLORS["panel_soft"],
+            border_width=1,
+            border_color=self.COLORS["border"],
+            corner_radius=12,
+        )
+        controls.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 10))
+        ctk.CTkLabel(
+            controls,
+            text="Auto-refresh",
+            text_color=self.COLORS["text"],
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).pack(side="left", padx=(14, 10), pady=10)
+        ctk.CTkLabel(controls, text="every", text_color=self.COLORS["muted"]).pack(side="left")
         self.refresh_interval = ctk.CTkComboBox(
             controls,
             values=["1", "2", "5", "10", "15", "30"],
             width=68,
+            height=32,
+            fg_color=self.COLORS["panel_alt"],
+            border_color=self.COLORS["border_light"],
+            button_color=self.COLORS["border_light"],
+            button_hover_color=self.COLORS["accent"],
             command=lambda _value: self.change_auto_refresh_interval(),
         )
         self.refresh_interval.set("5")
@@ -174,14 +403,16 @@ class GamblerBotGUI(
             controls,
             text="Start",
             command=self.toggle_auto_refresh,
-            width=76,
-            height=28,
+            width=86,
+            height=32,
+            fg_color=self.COLORS["accent"],
+            hover_color=self.COLORS["accent_hover"],
         )
         self.auto_refresh_button.pack(side="left")
         self.auto_refresh_label = ctk.CTkLabel(
             controls,
             text="Ready • 05:00",
-            text_color=("gray40", "gray70"),
+            text_color=self.COLORS["muted"],
             font=ctk.CTkFont(size=11, weight="bold"),
         )
         self.auto_refresh_label.pack(side="left", padx=12)
@@ -192,7 +423,14 @@ class GamblerBotGUI(
             text_color=("gray50", "gray60"), font=ctk.CTkFont(size=10),
         ).pack(side="left")
         self.credit_floor = ctk.CTkComboBox(
-            quota_controls, values=["5", "10", "25", "50", "100"], width=68
+            quota_controls,
+            values=["5", "10", "25", "50", "100"],
+            width=68,
+            height=32,
+            fg_color=self.COLORS["panel_alt"],
+            border_color=self.COLORS["border_light"],
+            button_color=self.COLORS["border_light"],
+            button_hover_color=self.COLORS["accent"],
         )
         self.credit_floor.set("10")
         self.credit_floor.pack(side="left", padx=5)
@@ -212,7 +450,14 @@ class GamblerBotGUI(
             fg_color=("gray70", "gray28"), hover_color=("gray60", "gray35"),
         ).pack(side="right")
         self.terminal_box = ctk.CTkTextbox(
-            self.console_tab, font=("Consolas", 12), state="disabled", wrap="word"
+            self.console_tab,
+            font=("Consolas", 12),
+            state="disabled",
+            wrap="word",
+            fg_color=self.COLORS["panel_soft"],
+            border_width=1,
+            border_color=self.COLORS["border"],
+            corner_radius=10,
         )
         self.terminal_box.pack(fill="both", expand=True, padx=15, pady=(0, 15))
 
@@ -386,13 +631,13 @@ class GamblerBotGUI(
             usage.get("remaining"), usage.get("used"), usage.get("last")
         )
         if remaining is None:
-            self.quota_label.configure(text="API credits: unavailable")
+            self.quota_label.configure(text="Credits: n/a")
             return
-        text = f"API credits: {remaining} remaining"
-        if used is not None:
-            text += f"  |  {used} used"
+        text = f"Credits: {remaining}"
         if last is not None:
-            text += f"  |  last scan cost {last}"
+            text += f"  |  scan {last}"
+        elif used is not None:
+            text += f"  |  used {used}"
         self.quota_label.configure(text=text)
         self.pause_auto_refresh_for_quota()
 
@@ -432,7 +677,7 @@ class GamblerBotGUI(
 
     def finish_scan(self):
         self.scan_in_progress = False
-        self.scan_button.configure(state="normal", text="3. Scan odds")
+        self.scan_button.configure(state="normal", text="Scan")
         if self.auto_refresh_enabled:
             self.auto_refresh_remaining = self.get_refresh_interval_seconds() or 300
             self.auto_refresh_label.configure(

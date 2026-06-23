@@ -16,11 +16,16 @@ class HistoryExportMixin:
         header = ctk.CTkFrame(self.history_tab, fg_color="transparent")
         header.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 4))
         ctk.CTkLabel(
-            header, text="Odds history", font=ctk.CTkFont(size=15, weight="bold")
+            header,
+            text="Odds history",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color=self.COLORS["text"],
         ).pack(side="left")
         ctk.CTkButton(
             header, text="Save all history to CSV", command=self.export_history_csv,
-            width=145, height=28,
+            width=165, height=34,
+            fg_color=self.COLORS["accent"],
+            hover_color=self.COLORS["accent_hover"],
         ).pack(side="right")
         ctk.CTkLabel(
             self.history_tab,
@@ -36,29 +41,45 @@ class HistoryExportMixin:
             text_color=("gray45", "gray65"),
             font=ctk.CTkFont(size=10),
         ).grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 7))
-        history_filters = ctk.CTkFrame(self.history_tab, fg_color="transparent")
+        history_filters = ctk.CTkFrame(
+            self.history_tab,
+            fg_color=self.COLORS["panel_soft"],
+            corner_radius=12,
+            border_width=1,
+            border_color=self.COLORS["border"],
+        )
         history_filters.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 8))
         history_filters.grid_columnconfigure(1, weight=1)
         history_filters.grid_columnconfigure(3, weight=2)
         ctk.CTkLabel(history_filters, text="Search:").grid(
-            row=0, column=0, sticky="w", padx=(0, 6)
+            row=0, column=0, sticky="w", padx=(12, 6), pady=10
         )
         self.history_search_entry = ctk.CTkEntry(
             history_filters,
             placeholder_text="Search team, outcome, or bookmaker...",
             width=220,
+            height=34,
+            fg_color=self.COLORS["panel_alt"],
+            border_color=self.COLORS["border_light"],
         )
-        self.history_search_entry.grid(row=0, column=1, sticky="ew", padx=(0, 12))
+        self.history_search_entry.grid(row=0, column=1, sticky="ew", padx=(0, 12), pady=10)
         self.history_search_entry.bind("<KeyRelease>", self.filter_history_series)
         ctk.CTkLabel(history_filters, text="Price line:").grid(
-            row=0, column=2, sticky="w", padx=(0, 6)
+            row=0, column=2, sticky="w", padx=(0, 6), pady=10
         )
         self.history_selector = ctk.CTkComboBox(
-            history_filters, values=["No history yet"], state="readonly",
+            history_filters,
+            values=["No history yet"],
+            state="readonly",
+            height=34,
+            fg_color=self.COLORS["panel_alt"],
+            border_color=self.COLORS["border_light"],
+            button_color=self.COLORS["border_light"],
+            button_hover_color=self.COLORS["accent"],
             command=lambda _value: self.draw_history_chart(),
         )
         self.history_selector.set("No history yet")
-        self.history_selector.grid(row=0, column=3, sticky="ew")
+        self.history_selector.grid(row=0, column=3, sticky="ew", padx=(0, 12), pady=10)
         self.history_selection_title = ctk.CTkLabel(
             self.history_tab,
             text="No price line selected",
@@ -70,7 +91,11 @@ class HistoryExportMixin:
             row=3, column=0, sticky="ew", padx=10, pady=(0, 6)
         )
         self.history_canvas = tk.Canvas(
-            self.history_tab, background="#202020", highlightthickness=0, height=340
+            self.history_tab,
+            background=self.COLORS["panel_soft"],
+            highlightthickness=1,
+            highlightbackground=self.COLORS["border"],
+            height=340,
         )
         self.history_canvas.grid(row=4, column=0, sticky="nsew", padx=10, pady=(0, 8))
         self.history_canvas.bind("<Configure>", lambda _event: self.draw_history_chart())

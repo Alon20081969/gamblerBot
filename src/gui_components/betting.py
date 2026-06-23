@@ -14,7 +14,10 @@ class BettingMixin:
         slip_header = ctk.CTkFrame(self.gamble_tab, fg_color="transparent")
         slip_header.grid(row=0, column=0, sticky="ew", padx=8, pady=(6, 8))
         self.slip_title = ctk.CTkLabel(
-            slip_header, text="Gamble slip", font=ctk.CTkFont(size=14, weight="bold")
+            slip_header,
+            text="Bet slip",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color=self.COLORS["text"],
         )
         self.slip_title.pack(side="left")
         ctk.CTkButton(
@@ -24,35 +27,55 @@ class BettingMixin:
         ).pack(side="right")
         ctk.CTkButton(
             slip_header, text="Export slip CSV", command=self.export_gamble_slip_csv,
-            width=105, height=28,
+            width=122, height=34,
+            fg_color=self.COLORS["accent"],
+            hover_color=self.COLORS["accent_hover"],
         ).pack(side="right", padx=(0, 6))
 
-        saved_controls = ctk.CTkFrame(self.gamble_tab, fg_color="transparent")
+        saved_controls = ctk.CTkFrame(
+            self.gamble_tab,
+            fg_color=self.COLORS["panel_soft"],
+            corner_radius=12,
+            border_width=1,
+            border_color=self.COLORS["border"],
+        )
         saved_controls.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 8))
         saved_controls.grid_columnconfigure(0, weight=1)
         saved_controls.grid_columnconfigure(2, weight=1)
         self.slip_name_entry = ctk.CTkEntry(
-            saved_controls, placeholder_text="Name this slip..."
+            saved_controls,
+            placeholder_text="Name this slip...",
+            height=34,
+            fg_color=self.COLORS["panel_alt"],
+            border_color=self.COLORS["border_light"],
         )
-        self.slip_name_entry.grid(row=0, column=0, sticky="ew", padx=(0, 5))
+        self.slip_name_entry.grid(row=0, column=0, sticky="ew", padx=(10, 5), pady=(10, 4))
         self.slip_name_entry.bind("<Return>", lambda _event: self.save_named_slip())
         ctk.CTkButton(
             saved_controls, text="Save", command=self.save_named_slip, width=58
-        ).grid(row=0, column=1, padx=(0, 10))
+        ).grid(row=0, column=1, padx=(0, 10), pady=(10, 4))
         saved_names = sorted(self.saved_slips) or ["No saved slips"]
         self.saved_slips_dropdown = ctk.CTkComboBox(
-            saved_controls, values=saved_names, state="readonly", width=145
+            saved_controls,
+            values=saved_names,
+            state="readonly",
+            width=145,
+            height=34,
+            fg_color=self.COLORS["panel_alt"],
+            border_color=self.COLORS["border_light"],
+            button_color=self.COLORS["border_light"],
+            button_hover_color=self.COLORS["accent"],
         )
         self.saved_slips_dropdown.set(saved_names[0])
-        self.saved_slips_dropdown.grid(row=0, column=2, sticky="ew", padx=(0, 5))
+        self.saved_slips_dropdown.grid(row=0, column=2, sticky="ew", padx=(0, 5), pady=(10, 4))
         ctk.CTkButton(
             saved_controls, text="Load", command=self.load_named_slip, width=55
-        ).grid(row=0, column=3, padx=(0, 5))
+        ).grid(row=0, column=3, padx=(0, 5), pady=(10, 4))
         ctk.CTkButton(
             saved_controls, text="Delete", command=self.delete_named_slip,
             width=58, fg_color=("#b65d5d", "#8f3333"),
             hover_color=("#9f4646", "#a94444"),
-        ).grid(row=0, column=4)
+        ).grid(row=0, column=4, padx=(0, 10), pady=(10, 4))
         self.saved_slip_status = ctk.CTkLabel(
             saved_controls,
             text="Export slip CSV saves only the selections and stake currently in this slip.",
@@ -60,16 +83,26 @@ class BettingMixin:
             text_color=("gray45", "gray65"), font=ctk.CTkFont(size=10),
         )
         self.saved_slip_status.grid(
-            row=1, column=0, columnspan=5, sticky="ew", pady=(3, 0)
+            row=1, column=0, columnspan=5, sticky="ew", padx=10, pady=(3, 10)
         )
 
         self.bet_slip_results = ctk.CTkScrollableFrame(
-            self.gamble_tab, fg_color=("gray90", "gray14")
+            self.gamble_tab,
+            fg_color=self.COLORS["panel_soft"],
+            corner_radius=12,
+            border_width=1,
+            border_color=self.COLORS["border"],
         )
         self.bet_slip_results.grid(row=2, column=0, sticky="nsew", padx=4, pady=(0, 8))
         self.bet_slip_results.grid_columnconfigure(0, weight=1)
 
-        totals = ctk.CTkFrame(self.gamble_tab)
+        totals = ctk.CTkFrame(
+            self.gamble_tab,
+            fg_color=self.COLORS["panel_soft"],
+            corner_radius=12,
+            border_width=1,
+            border_color=self.COLORS["border"],
+        )
         totals.grid(row=3, column=0, sticky="ew", padx=4, pady=(0, 4))
         totals.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(totals, text="Stake amount:").grid(
@@ -216,7 +249,13 @@ class BettingMixin:
 
     def _build_calculator_tab(self):
         self.calculator_tab.grid_columnconfigure(0, weight=1)
-        calculator = ctk.CTkFrame(self.calculator_tab)
+        calculator = ctk.CTkFrame(
+            self.calculator_tab,
+            fg_color=self.COLORS["panel"],
+            corner_radius=14,
+            border_width=1,
+            border_color=self.COLORS["border"],
+        )
         calculator.grid(row=0, column=0, sticky="new", padx=18, pady=18)
         calculator.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(
@@ -241,7 +280,13 @@ class BettingMixin:
         self.calculator_stake_entry.bind("<KeyRelease>", self.update_odds_calculator)
 
     def build_custom_odd_controls(self, card, event_key, home, away, has_draw):
-        frame = ctk.CTkFrame(card, fg_color=("gray88", "gray19"))
+        frame = ctk.CTkFrame(
+            card,
+            fg_color=self.COLORS["panel_soft"],
+            corner_radius=10,
+            border_width=1,
+            border_color=self.COLORS["border"],
+        )
         frame.grid(row=3, column=0, sticky="ew", padx=12, pady=(0, 9))
         frame.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(frame, text="Custom odd:", font=ctk.CTkFont(size=11, weight="bold")).grid(
@@ -345,9 +390,16 @@ class BettingMixin:
         else:
             display_text = text
         button = ctk.CTkButton(
-            parent, text=display_text, anchor="center", height=28, border_width=1,
-            corner_radius=6, fg_color="transparent", hover_color="#287fd1",
-            border_color=("gray65", "gray35"), text_color=("gray10", "gray92"),
+            parent,
+            text=display_text,
+            anchor="center",
+            height=32,
+            border_width=1,
+            corner_radius=8,
+            fg_color=self.COLORS["panel_soft"],
+            hover_color=self.COLORS["accent"],
+            border_color=self.COLORS["border_light"],
+            text_color=self.COLORS["text"],
             command=lambda: self.toggle_bet(
                 identity, event_key, match, selection, bookmaker, odds
             ),
@@ -377,15 +429,15 @@ class BettingMixin:
                     continue
                 button.configure(
                     text=f"✓  {base_text}" if selected else base_text,
-                    fg_color="#1769aa" if selected else "transparent",
-                    hover_color="#3b9cff" if selected else "#287fd1",
-                    border_color="#77c4ff" if selected else ("gray65", "gray35"),
+                    fg_color=self.COLORS["accent"] if selected else self.COLORS["panel_soft"],
+                    hover_color=self.COLORS["accent_hover"] if selected else self.COLORS["accent"],
+                    border_color=self.COLORS["accent_hover"] if selected else self.COLORS["border_light"],
                     border_width=2 if selected else 1,
                     text_color=(
                         "white" if selected
                         else ("#147a3d", "#62d48b") if movement and movement > 0
                         else ("#a13a3a", "#ef8585") if movement and movement < 0
-                        else ("gray10", "gray92")
+                        else self.COLORS["text"]
                     ),
                 )
             except tk.TclError:
@@ -409,8 +461,14 @@ class BettingMixin:
             self.update_bet_totals()
             return
         for row, (event_key, bet) in enumerate(self.selected_bets.items()):
-            card = ctk.CTkFrame(self.bet_slip_results, corner_radius=8)
-            card.grid(row=row, column=0, sticky="ew", padx=4, pady=4)
+            card = ctk.CTkFrame(
+                self.bet_slip_results,
+                corner_radius=10,
+                fg_color=self.COLORS["panel"],
+                border_width=1,
+                border_color=self.COLORS["border"],
+            )
+            card.grid(row=row, column=0, sticky="ew", padx=8, pady=6)
             card.grid_columnconfigure(0, weight=1)
             ctk.CTkLabel(
                 card, text=(f"{bet['match']}\nPick: {bet['selection']}  •  "

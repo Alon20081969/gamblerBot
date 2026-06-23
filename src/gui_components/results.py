@@ -15,17 +15,27 @@ class ResultsMixin:
         header = ctk.CTkFrame(self.results_tab, fg_color="transparent")
         header.grid(row=0, column=0, sticky="ew", padx=8, pady=(6, 8))
         self.results_title = ctk.CTkLabel(
-            header, text="Game odds overview", font=ctk.CTkFont(size=14, weight="bold")
+            header,
+            text="Market results",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color=self.COLORS["text"],
         )
         self.results_title.pack(side="left")
         self.result_search_entry = ctk.CTkEntry(
-            header, placeholder_text="Search home or away team...", width=230
+            header,
+            placeholder_text="Search teams...",
+            width=250,
+            height=34,
+            fg_color=self.COLORS["panel_alt"],
+            border_color=self.COLORS["border_light"],
         )
         self.result_search_entry.pack(side="right")
         self.result_search_entry.bind("<KeyRelease>", self.filter_result_teams)
         ctk.CTkButton(
             header, text="Export scan CSV", command=self.export_results_csv,
-            width=105, height=28,
+            width=122, height=34,
+            fg_color=self.COLORS["accent"],
+            hover_color=self.COLORS["accent_hover"],
         ).pack(side="right", padx=(0, 8))
         ctk.CTkLabel(
             header,
@@ -45,7 +55,11 @@ class ResultsMixin:
         )
         self.results_export_status.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 6))
         self.game_results = ctk.CTkScrollableFrame(
-            self.results_tab, fg_color=("gray90", "gray14")
+            self.results_tab,
+            fg_color=self.COLORS["panel_soft"],
+            corner_radius=12,
+            border_width=1,
+            border_color=self.COLORS["border"],
         )
         self.game_results.grid(row=2, column=0, sticky="nsew", padx=4, pady=(0, 4))
         self.game_results.grid_columnconfigure(0, weight=1)
@@ -162,10 +176,22 @@ class ResultsMixin:
             self.results_title.configure(text=f"Game odds overview  •  {len(games)} games")
 
     def create_game_card(self, row, event_key, home, away, game_df):
-        card = ctk.CTkFrame(self.game_results, corner_radius=9)
-        card.grid(row=row, column=0, sticky="ew", padx=4, pady=5)
+        card = ctk.CTkFrame(
+            self.game_results,
+            corner_radius=12,
+            fg_color=self.COLORS["panel"],
+            border_width=1,
+            border_color=self.COLORS["border"],
+        )
+        card.grid(row=row, column=0, sticky="ew", padx=8, pady=7)
         card.grid_columnconfigure(0, weight=1)
-        details = ctk.CTkFrame(card, fg_color=("gray87", "gray18"))
+        details = ctk.CTkFrame(
+            card,
+            fg_color=self.COLORS["panel_soft"],
+            corner_radius=10,
+            border_width=1,
+            border_color=self.COLORS["border"],
+        )
         state = {"expanded": False, "loaded": False}
 
         def toggle_details():
@@ -182,8 +208,8 @@ class ResultsMixin:
 
         arrow = ctk.CTkButton(
             card, text=f"▶  {home} vs {away}", command=toggle_details,
-            anchor="w", fg_color="transparent", hover_color=("gray78", "gray25"),
-            text_color=("gray10", "gray95"), font=ctk.CTkFont(size=14, weight="bold"),
+            anchor="w", fg_color="transparent", hover_color=self.COLORS["panel_alt"],
+            text_color=self.COLORS["text"], font=ctk.CTkFont(size=15, weight="bold"),
         )
         arrow.grid(row=0, column=0, sticky="ew", padx=8, pady=(7, 3))
         first = game_df.iloc[0]
@@ -193,7 +219,7 @@ class ResultsMixin:
                   f"Jerusalem time: {self.format_jerusalem_time(first.get('commence_time'))}\n"
                   f"Country: {self.metadata_value(first.get('country'))}   •   "
                   f"Stadium: {self.metadata_value(first.get('stadium'))}"),
-            anchor="w", justify="left", text_color=("gray35", "gray70"),
+            anchor="w", justify="left", text_color=self.COLORS["muted"],
             font=ctk.CTkFont(size=11),
         ).grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 5))
 
@@ -213,7 +239,11 @@ class ResultsMixin:
             highest = valid.loc[valid[column].idxmax()]
             lowest = valid.loc[valid[column].idxmin()]
             ctk.CTkLabel(
-                summary, text=label, anchor="w", font=ctk.CTkFont(size=12, weight="bold")
+                summary,
+                text=label,
+                anchor="w",
+                text_color=self.COLORS["text"],
+                font=ctk.CTkFont(size=12, weight="bold"),
             ).grid(row=result_row, column=0, sticky="w", padx=(0, 12), pady=2)
             for col, prefix, odds_row in (
                 (1, "Highest", highest), (2, "Lowest", lowest)

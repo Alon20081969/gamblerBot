@@ -18,36 +18,56 @@ class CompetitionMixin:
         return "us"
 
     def build_competition_browser(self, parent):
-        self.browser_frame = ctk.CTkFrame(parent, width=300)
-        self.browser_frame.grid(row=0, column=1, sticky="ns")
-        self.browser_frame.grid_propagate(False)
+        parent.grid_rowconfigure(0, weight=1)
+        parent.grid_columnconfigure(0, weight=1)
+        self.browser_frame = ctk.CTkFrame(
+            parent,
+            fg_color=self.COLORS["panel"],
+            corner_radius=14,
+            border_width=1,
+            border_color=self.COLORS["border"],
+        )
+        self.browser_frame.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
         self.browser_frame.grid_rowconfigure(4, weight=1)
         self.browser_frame.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
             self.browser_frame, text="Browse competitions",
-            font=ctk.CTkFont(size=14, weight="bold"),
-        ).grid(row=0, column=0, sticky="w", padx=15, pady=(14, 8))
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color=self.COLORS["text"],
+        ).grid(row=0, column=0, sticky="w", padx=18, pady=(18, 8))
         ctk.CTkLabel(
             self.browser_frame,
             text="Search by competition name:",
             anchor="w",
-            text_color=("gray40", "gray70"),
+            text_color=self.COLORS["muted"],
             font=ctk.CTkFont(size=10),
-        ).grid(row=1, column=0, sticky="ew", padx=15, pady=(0, 3))
+        ).grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 3))
         self.competition_search = ctk.CTkEntry(
-            self.browser_frame, placeholder_text="Search competitions..."
+            self.browser_frame,
+            placeholder_text="Search competitions...",
+            height=36,
+            fg_color=self.COLORS["panel_alt"],
+            border_color=self.COLORS["border_light"],
         )
-        self.competition_search.grid(row=2, column=0, sticky="ew", padx=15, pady=(0, 6))
+        self.competition_search.grid(row=2, column=0, sticky="ew", padx=18, pady=(0, 8))
         self.competition_search.bind("<KeyRelease>", self.filter_competitions)
         self.search_result_count = ctk.CTkLabel(
-            self.browser_frame, text="", anchor="w", text_color=("gray45", "gray65"),
+            self.browser_frame,
+            text="",
+            anchor="w",
+            text_color=self.COLORS["muted"],
             font=ctk.CTkFont(size=11),
         )
-        self.search_result_count.grid(row=3, column=0, sticky="ew", padx=15, pady=(0, 5))
+        self.search_result_count.grid(row=3, column=0, sticky="ew", padx=18, pady=(0, 5))
         self.competition_results = ctk.CTkScrollableFrame(
-            self.browser_frame, label_text="", fg_color=("gray88", "gray17")
+            self.browser_frame,
+            label_text="",
+            fg_color=self.COLORS["panel_soft"],
+            corner_radius=10,
+            border_width=1,
+            border_color=self.COLORS["border"],
         )
-        self.competition_results.grid(row=4, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        self.competition_results.grid(row=4, column=0, sticky="nsew", padx=12, pady=(0, 12))
         self.competition_results.grid_columnconfigure(0, weight=1)
         self.populate_competition_browser()
 
@@ -93,28 +113,34 @@ class CompetitionMixin:
             ).grid(row=0, column=0, sticky="ew", padx=8, pady=16)
             return
         for row, competition in enumerate(matches):
-            item = ctk.CTkFrame(self.competition_results, fg_color="transparent")
+            selected = competition == self.competition_dropdown.get()
+            item = ctk.CTkFrame(
+                self.competition_results,
+                fg_color=self.COLORS["panel_alt"] if selected else "transparent",
+                corner_radius=8,
+            )
             item.grid(row=row, column=0, sticky="ew", padx=3, pady=3)
             item.grid_columnconfigure(1, weight=1)
             key = self.competition_catalog[sport][competition]["key"]
             favorite = key in self.favorite_competition_keys
             ctk.CTkButton(
                 item, text="★" if favorite else "☆", width=34, fg_color="transparent",
-                hover_color=("gray78", "gray25"),
-                text_color="#f2b632" if favorite else ("gray35", "gray70"),
+                hover_color=self.COLORS["panel_alt"],
+                text_color=self.COLORS["warning"] if favorite else self.COLORS["muted"],
                 font=ctk.CTkFont(size=18),
                 command=lambda name=competition: self.toggle_favorite(name),
             ).grid(row=0, column=0, padx=(0, 3))
             ctk.CTkButton(
                 item, text=competition, anchor="w", fg_color="transparent",
-                border_width=1, border_color=("gray70", "gray30"),
-                text_color=("gray10", "gray90"), hover_color=("gray78", "gray25"),
+                border_width=1, border_color=self.COLORS["border"],
+                text_color=self.COLORS["text"], hover_color=self.COLORS["panel_alt"],
                 command=lambda name=competition: self.select_competition(name),
             ).grid(row=0, column=1, sticky="ew")
 
     def select_competition(self, competition):
         self.competition_dropdown.set(competition)
         self.catalog_status.configure(text=f"Selected: {competition}")
+        self.populate_competition_browser(self.competition_search.get())
 
     def sorted_competitions(self, sport):
         competitions = self.competition_catalog.get(sport, {})
