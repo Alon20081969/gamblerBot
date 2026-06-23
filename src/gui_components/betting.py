@@ -502,6 +502,7 @@ class BettingMixin:
             self.combined_odds_label.configure(text="Combined odds: —")
             self.return_label.configure(text="Potential return: 0.00")
             self.profit_label.configure(text="Estimated profit: 0.00")
+            self.update_nav_slip_summary()
             return
         combined = 1.0
         for bet in self.selected_bets.values():
@@ -515,6 +516,8 @@ class BettingMixin:
         except ValueError:
             self.return_label.configure(text="Potential return: enter a valid stake")
             self.profit_label.configure(text="Estimated profit: —")
+            self.update_nav_slip_summary()
             return
         self.return_label.configure(text=f"Potential return: {stake * combined:,.2f}")
         self.profit_label.configure(text=f"Estimated profit: {stake * (combined - 1):,.2f}")
+        self.update_nav_slip_summary()

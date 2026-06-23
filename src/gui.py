@@ -157,8 +157,22 @@ class GamblerBotGUI(
         if not hasattr(self, "pages") or page_name not in self.pages:
             return
         self.pages[page_name].tkraise()
-        if hasattr(self, "nav_bar"):
-            self.nav_bar.set(page_name)
+        self.update_nav_button_styles(page_name)
+
+    def update_nav_button_styles(self, active_page=None):
+        if not hasattr(self, "nav_buttons"):
+            return
+        active_page = active_page or getattr(self, "current_page", "Results")
+        self.current_page = active_page
+        for page_name, button in self.nav_buttons.items():
+            selected = page_name == active_page
+            button.configure(
+                fg_color=self.COLORS["accent"] if selected else "transparent",
+                hover_color=self.COLORS["panel_alt"],
+                text_color="white" if selected else self.COLORS["muted"],
+                border_width=1 if selected else 0,
+                border_color=self.COLORS["accent_hover"],
+            )
 
     def _build_top_controls_legacy(self):
         self.top_frame = ctk.CTkFrame(
@@ -270,32 +284,48 @@ class GamblerBotGUI(
         )
         self.top_frame.pack(side="top", fill="x")
         self.top_frame.grid_columnconfigure(1, weight=1)
-        self.top_frame.grid_columnconfigure(4, weight=1)
+        self.top_frame.grid_columnconfigure(5, weight=1)
 
         ctk.CTkLabel(
             self.top_frame,
             text="GamblerBot",
             font=ctk.CTkFont(size=20, weight="bold"),
             text_color=self.COLORS["text"],
-        ).grid(row=0, column=0, sticky="w", padx=(14, 10), pady=8)
+        ).grid(row=0, column=0, sticky="w", padx=(18, 18), pady=(9, 6))
 
-        self.nav_bar = ctk.CTkSegmentedButton(
-            self.top_frame,
-            values=self.page_names,
-            command=self.show_page,
-            fg_color=self.COLORS["panel_alt"],
-            selected_color=self.COLORS["accent"],
-            selected_hover_color=self.COLORS["accent_hover"],
-            unselected_color=self.COLORS["panel_alt"],
-            unselected_hover_color=self.COLORS["border_light"],
-        )
-        self.nav_bar.grid(row=0, column=1, sticky="ew", padx=(0, 12), pady=8)
+        nav_frame = ctk.CTkFrame(self.top_frame, fg_color="transparent")
+        nav_frame.grid(row=0, column=1, columnspan=5, sticky="w", pady=(9, 6))
+        self.nav_buttons = {}
+        nav_labels = {
+            "Competitions": "Competitions",
+            "Results": "Results",
+            "Bet Slip": "Bet Slip",
+            "Calculator": "Calculator",
+            "History": "History",
+            "Console": "Console",
+            "Settings": "Settings",
+        }
+        for page_name in self.page_names:
+            button = ctk.CTkButton(
+                nav_frame,
+                text=nav_labels[page_name],
+                command=lambda name=page_name: self.show_page(name),
+                width=92,
+                height=30,
+                corner_radius=8,
+                fg_color="transparent",
+                hover_color=self.COLORS["panel_alt"],
+                text_color=self.COLORS["muted"],
+                font=ctk.CTkFont(size=12, weight="bold"),
+            )
+            button.pack(side="left", padx=(0, 5))
+            self.nav_buttons[page_name] = button
 
         self.sport_dropdown = ctk.CTkComboBox(
             self.top_frame,
             values=sorted(self.competition_catalog),
             command=self.on_sport_changed,
-            width=150,
+            width=190,
             height=34,
             state="readonly",
             fg_color=self.COLORS["panel_alt"],
@@ -305,12 +335,12 @@ class GamblerBotGUI(
             dropdown_fg_color=self.COLORS["panel_alt"],
         )
         self.sport_dropdown.set("Soccer")
-        self.sport_dropdown.grid(row=0, column=2, sticky="e", padx=(0, 8), pady=8)
+        self.sport_dropdown.grid(row=1, column=0, sticky="ew", padx=(18, 8), pady=(0, 8))
 
         self.competition_dropdown = ctk.CTkComboBox(
             self.top_frame,
             values=[],
-            width=240,
+            width=300,
             height=34,
             state="readonly",
             fg_color=self.COLORS["panel_alt"],
@@ -319,7 +349,7 @@ class GamblerBotGUI(
             border_color=self.COLORS["border_light"],
             dropdown_fg_color=self.COLORS["panel_alt"],
         )
-        self.competition_dropdown.grid(row=0, column=3, sticky="e", padx=(0, 8), pady=8)
+        self.competition_dropdown.grid(row=1, column=1, sticky="w", padx=(0, 8), pady=(0, 8))
         self.on_sport_changed("Soccer")
 
         self.scan_button = ctk.CTkButton(
@@ -333,7 +363,21 @@ class GamblerBotGUI(
             hover_color=self.COLORS["accent_hover"],
             font=ctk.CTkFont(size=13, weight="bold"),
         )
-        self.scan_button.grid(row=0, column=4, sticky="e", padx=(0, 8), pady=8)
+        self.scan_button.grid(row=1, column=2, sticky="w", padx=(0, 10), pady=(0, 8))
+
+        self.slip_summary_button = ctk.CTkButton(
+            self.top_frame,
+            text="Slip: empty",
+            command=lambda: self.show_page("Bet Slip"),
+            width=170,
+            height=34,
+            corner_radius=10,
+            fg_color=self.COLORS["panel_alt"],
+            hover_color=self.COLORS["border_light"],
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=10, weight="bold"),
+        )
+        self.slip_summary_button.grid(row=1, column=4, sticky="e", padx=(0, 8), pady=(0, 8))
 
         self.quota_label = ctk.CTkLabel(
             self.top_frame,
@@ -345,7 +389,7 @@ class GamblerBotGUI(
             text_color=self.COLORS["muted"],
             font=ctk.CTkFont(size=10, weight="bold"),
         )
-        self.quota_label.grid(row=0, column=5, sticky="e", padx=(0, 14), pady=8)
+        self.quota_label.grid(row=1, column=5, sticky="e", padx=(0, 18), pady=(0, 8))
 
         self.catalog_status = ctk.CTkLabel(
             self.top_frame,
@@ -353,8 +397,44 @@ class GamblerBotGUI(
             text_color=self.COLORS["muted"],
             font=ctk.CTkFont(size=10),
         )
+        self.update_nav_slip_summary()
+        self.update_nav_button_styles("Results")
 
-    def _build_settings_tab(self):
+    def update_nav_slip_summary(self):
+        if not hasattr(self, "slip_summary_button"):
+            return
+        count = len(self.selected_bets)
+        if not count:
+            self.slip_summary_button.configure(
+                text="Slip: empty",
+                fg_color=self.COLORS["panel_alt"],
+                hover_color=self.COLORS["border_light"],
+                text_color=self.COLORS["muted"],
+            )
+            return
+
+        combined = 1.0
+        for bet in self.selected_bets.values():
+            combined *= float(bet["odds"])
+
+        text = f"Slip: {count} pick{'s' if count != 1 else ''} | {combined:.2f}"
+        try:
+            if hasattr(self, "stake_entry"):
+                stake_text = self.stake_entry.get().strip()
+                stake = float(stake_text) if stake_text else 0.0
+                if stake > 0:
+                    text += f" | Return {stake * combined:,.2f}"
+        except ValueError:
+            text += " | check stake"
+
+        self.slip_summary_button.configure(
+            text=text,
+            fg_color=self.COLORS["accent"],
+            hover_color=self.COLORS["accent_hover"],
+            text_color="white",
+        )
+
+    def _build_settings_tab_legacy(self):
         self.settings_tab.grid_rowconfigure(1, weight=1)
         self.settings_tab.grid_columnconfigure(0, weight=1)
         header = ctk.CTkFrame(self.settings_tab, fg_color="transparent")
@@ -367,7 +447,7 @@ class GamblerBotGUI(
         ).pack(side="left")
         self._build_auto_refresh_controls(self.settings_tab)
 
-    def _build_auto_refresh_controls(self, parent):
+    def _build_auto_refresh_controls_legacy(self, parent):
         controls = ctk.CTkFrame(
             parent,
             fg_color=self.COLORS["panel_soft"],
@@ -438,6 +518,223 @@ class GamblerBotGUI(
             quota_controls, text="credits", text_color=("gray50", "gray60"),
             font=ctk.CTkFont(size=10),
         ).pack(side="left")
+
+    def _build_settings_tab(self):
+        self.settings_tab.grid_rowconfigure(1, weight=1)
+        self.settings_tab.grid_columnconfigure(0, weight=1)
+
+        header = ctk.CTkFrame(self.settings_tab, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=18, pady=(14, 8))
+        ctk.CTkLabel(
+            header,
+            text="Settings",
+            font=ctk.CTkFont(size=22, weight="bold"),
+            text_color=self.COLORS["text"],
+        ).pack(side="left")
+        ctk.CTkLabel(
+            header,
+            text="Control scanning, API safety, and local project data.",
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=11),
+        ).pack(side="left", padx=14)
+
+        settings_grid = ctk.CTkFrame(self.settings_tab, fg_color="transparent")
+        settings_grid.grid(row=1, column=0, sticky="nsew", padx=18, pady=(2, 18))
+        settings_grid.grid_columnconfigure((0, 1), weight=1, uniform="settings")
+        settings_grid.grid_rowconfigure(2, weight=1)
+
+        auto_card = self._settings_card(
+            settings_grid,
+            row=0,
+            column=0,
+            title="Auto-refresh",
+            description="Automatically scan the selected competition on a timer.",
+        )
+        self._build_auto_refresh_controls(auto_card)
+
+        safety_card = self._settings_card(
+            settings_grid,
+            row=0,
+            column=1,
+            title="API credit safety",
+            description="Pause automatic scans before your API credits run too low.",
+        )
+        self._build_credit_safety_controls(safety_card)
+
+        data_card = self._settings_card(
+            settings_grid,
+            row=1,
+            column=0,
+            title="Local data",
+            description="Exports and saved app data stay inside this project.",
+        )
+        self._build_data_settings_card(data_card)
+
+        tips_card = self._settings_card(
+            settings_grid,
+            row=1,
+            column=1,
+            title="Quick guide",
+            description="Short reminders for using the scanner clearly.",
+        )
+        self._build_settings_tips_card(tips_card)
+
+    def _settings_card(self, parent, row, column, title, description):
+        card = ctk.CTkFrame(
+            parent,
+            fg_color=self.COLORS["panel_soft"],
+            border_width=1,
+            border_color=self.COLORS["border"],
+            corner_radius=14,
+        )
+        card.grid(row=row, column=column, sticky="nsew", padx=8, pady=8)
+        card.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            card,
+            text=title,
+            text_color=self.COLORS["text"],
+            font=ctk.CTkFont(size=16, weight="bold"),
+        ).grid(row=0, column=0, sticky="w", padx=18, pady=(16, 3))
+        ctk.CTkLabel(
+            card,
+            text=description,
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=11),
+            wraplength=520,
+            justify="left",
+        ).grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 10))
+        return card
+
+    def _build_auto_refresh_controls(self, parent):
+        controls = ctk.CTkFrame(
+            parent,
+            fg_color=self.COLORS["panel"],
+            border_width=1,
+            border_color=self.COLORS["border"],
+            corner_radius=12,
+        )
+        controls.grid(row=2, column=0, sticky="ew", padx=18, pady=(0, 16))
+        controls.grid_columnconfigure(4, weight=1)
+        ctk.CTkLabel(
+            controls,
+            text="Scan every",
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).grid(row=0, column=0, padx=(14, 8), pady=14, sticky="w")
+        self.refresh_interval = ctk.CTkComboBox(
+            controls,
+            values=["1", "2", "5", "10", "15", "30"],
+            width=68,
+            height=32,
+            fg_color=self.COLORS["panel_alt"],
+            border_color=self.COLORS["border_light"],
+            button_color=self.COLORS["border_light"],
+            button_hover_color=self.COLORS["accent"],
+            command=lambda _value: self.change_auto_refresh_interval(),
+        )
+        self.refresh_interval.set("5")
+        self.refresh_interval.grid(row=0, column=1, padx=(0, 8), pady=14)
+        self.refresh_interval.bind("<Return>", lambda _event: self.change_auto_refresh_interval())
+        self.refresh_interval.bind("<FocusOut>", lambda _event: self.change_auto_refresh_interval())
+        ctk.CTkLabel(
+            controls,
+            text="minutes",
+            text_color=self.COLORS["muted"],
+        ).grid(row=0, column=2, padx=(0, 14), pady=14)
+        self.auto_refresh_button = ctk.CTkButton(
+            controls,
+            text="Start",
+            command=self.toggle_auto_refresh,
+            width=86,
+            height=32,
+            fg_color=self.COLORS["accent"],
+            hover_color=self.COLORS["accent_hover"],
+        )
+        self.auto_refresh_button.grid(row=0, column=3, padx=(0, 14), pady=14)
+        self.auto_refresh_label = ctk.CTkLabel(
+            controls,
+            text="Ready • 05:00",
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=11, weight="bold"),
+        )
+        self.auto_refresh_label.grid(row=0, column=4, padx=(0, 14), pady=14, sticky="w")
+
+    def _build_credit_safety_controls(self, parent):
+        quota_controls = ctk.CTkFrame(
+            parent,
+            fg_color=self.COLORS["panel"],
+            border_width=1,
+            border_color=self.COLORS["border"],
+            corner_radius=12,
+        )
+        quota_controls.grid(row=2, column=0, sticky="ew", padx=18, pady=(0, 16))
+        quota_controls.grid_columnconfigure(3, weight=1)
+        ctk.CTkLabel(
+            quota_controls,
+            text="Pause at",
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).grid(row=0, column=0, padx=(14, 8), pady=(14, 6), sticky="w")
+        self.credit_floor = ctk.CTkComboBox(
+            quota_controls,
+            values=["5", "10", "25", "50", "100"],
+            width=68,
+            height=32,
+            fg_color=self.COLORS["panel_alt"],
+            border_color=self.COLORS["border_light"],
+            button_color=self.COLORS["border_light"],
+            button_hover_color=self.COLORS["accent"],
+        )
+        self.credit_floor.set("10")
+        self.credit_floor.grid(row=0, column=1, padx=(0, 8), pady=(14, 6))
+        ctk.CTkLabel(
+            quota_controls,
+            text="credits remaining",
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=11),
+        ).grid(row=0, column=2, padx=(0, 14), pady=(14, 6), sticky="w")
+        ctk.CTkLabel(
+            quota_controls,
+            text="Auto-refresh pauses before crossing this credit level.",
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=10),
+            justify="left",
+        ).grid(row=1, column=0, columnspan=4, sticky="ew", padx=14, pady=(0, 14))
+
+    def _build_data_settings_card(self, parent):
+        ctk.CTkLabel(
+            parent,
+            text=f"Exports folder: {self.EXPORT_DIR.name}/",
+            text_color=self.COLORS["text"],
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).grid(row=2, column=0, sticky="w", padx=18, pady=(2, 5))
+        ctk.CTkLabel(
+            parent,
+            text=(
+                "Scan CSVs, bet-slip CSVs, and history exports are saved in "
+                "the project exports folder. Favorites and saved slips are "
+                "stored as hidden JSON files in the project root."
+            ),
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=11),
+            wraplength=520,
+            justify="left",
+        ).grid(row=3, column=0, sticky="ew", padx=18, pady=(0, 16))
+
+    def _build_settings_tips_card(self, parent):
+        tips = (
+            "• Favorite leagues in Competitions.\n"
+            "• Results shows highest and lowest bookmaker odds.\n"
+            "• Click an odd to add or remove it from Bet Slip.\n"
+            "• History is useful after scanning the same competition twice."
+        )
+        ctk.CTkLabel(
+            parent,
+            text=tips,
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=11),
+            justify="left",
+        ).grid(row=2, column=0, sticky="w", padx=18, pady=(2, 16))
 
     def _build_console_tab(self):
         header = ctk.CTkFrame(self.console_tab, fg_color="transparent")
