@@ -1,8 +1,10 @@
-import tkinter as tk
+import threading
+import tkinter
 
 import customtkinter as ctk
 import pandas as pd
 
+from src.ingestion.winner_fetcher import WinnerOddsFetcher, match_winner_game
 from src.models.probabilities import MarketAnalyzer
 
 
@@ -56,6 +58,8 @@ class AdvisorMixin:
         )
         self.advisor_results.grid(row=2, column=0, sticky="nsew", padx=4, pady=(0, 4))
         self.advisor_results.grid_columnconfigure(0, weight=1)
+        self.advisor_controls = []
+        self.winner_sync_generation = 0
         self.show_advisor_message("Scan a competition to generate suggestions.")
 
     def show_advisor_message(self, message):
@@ -71,6 +75,7 @@ class AdvisorMixin:
     def render_advisor(self, df):
         if not hasattr(self, "advisor_results"):
             return
+        self.winner_sync_generation += 1
         for widget in self.advisor_results.winfo_children():
             widget.destroy()
 
@@ -88,8 +93,10 @@ class AdvisorMixin:
                 "you enter Winner's exact decimal odd."
             )
         )
+        self.advisor_controls = []
         for position, (_, candidate) in enumerate(candidates.iterrows(), start=1):
             self.create_advisor_card(position, candidate)
+        self.start_winner_auto_sync()
 
     def create_advisor_card(self, position, candidate):
         chance = float(candidate["consensus_probability_pct"])
@@ -191,8 +198,109 @@ class AdvisorMixin:
                 candidate, odds_entry, verdict, add_button
             ),
         )
+        self.advisor_controls.append(
+            {
+                "candidate": candidate.copy(),
+                "entry": odds_entry,
+                "verdict": verdict,
+                "button": add_button,
+            }
+        )
 
-    def evaluate_winner_candidate(self, candidate, odds_entry, verdict, button):
+    def start_winner_auto_sync(self):
+        if self.sport_dropdown.get() != "Soccer":
+            if hasattr(self, "winner_sync_label"):
+                self.winner_sync_label.configure(
+                    text=" • Winner sync: soccer only",
+                    text_color=self.COLORS["muted"],
+                )
+            return
+        self.winner_sync_generation += 1
+        generation = self.winner_sync_generation
+        controls = list(self.advisor_controls)
+        if hasattr(self, "winner_sync_label"):
+            self.winner_sync_label.configure(
+                text=" • Auto-syncing Winner odds...",
+                text_color=self.COLORS["warning"],
+            )
+        threading.Thread(
+            target=self._winner_sync_worker,
+            args=(generation, controls),
+            daemon=True,
+        ).start()
+
+    def _winner_sync_worker(self, generation, controls):
+        result = WinnerOddsFetcher().fetch()
+        matches = []
+        if not result.error:
+            for control in controls:
+                candidate = control["candidate"]
+                match, score = match_winner_game(
+                    candidate.get("home_team"),
+                    candidate.get("away_team"),
+                    result.matches,
+                )
+                winner_odd = (
+                    match.odd_for(str(candidate.get("odds_column")))
+                    if match
+                    else None
+                )
+                matches.append((control, winner_odd, score))
+        self.post_to_ui(
+            self._apply_winner_sync,
+            generation,
+            result,
+            matches,
+        )
+
+    def _apply_winner_sync(self, generation, result, matches):
+        if generation != self.winner_sync_generation:
+            return
+        populated = 0
+        for control, winner_odd, _score in matches:
+            entry = control["entry"]
+            try:
+                if not entry.winfo_exists() or winner_odd is None:
+                    continue
+                entry.delete(0, "end")
+                entry.insert(0, f"{float(winner_odd):.2f}")
+                self.evaluate_winner_candidate(
+                    control["candidate"],
+                    entry,
+                    control["verdict"],
+                    control["button"],
+                    source="auto",
+                )
+                populated += 1
+            except (tkinter.TclError, ValueError, TypeError):
+                continue
+
+        if result.error:
+            status = " • Winner sync unavailable"
+            color = self.COLORS["danger"]
+            self.advisor_status.configure(
+                text=(
+                    f"{result.error} Manual Winner entry remains available. "
+                    "Set WINNER_ODDS_URL to a public JSON/HTML schedule endpoint "
+                    "if Winner changes its listings."
+                )
+            )
+        else:
+            status = f" • Winner synced {populated}/{len(self.advisor_controls)}"
+            color = self.COLORS["success"] if populated else self.COLORS["warning"]
+            if not populated:
+                self.advisor_status.configure(
+                    text=(
+                        f"Winner returned {len(result.matches)} listings, but none "
+                        "matched this scan confidently. Manual entry remains available."
+                    )
+                )
+        if hasattr(self, "winner_sync_label"):
+            self.winner_sync_label.configure(text=status, text_color=color)
+
+    def evaluate_winner_candidate(
+        self, candidate, odds_entry, verdict, button, source="manual"
+    ):
         try:
             winner_odds = float(odds_entry.get().strip())
             if winner_odds <= 1:
@@ -219,11 +327,13 @@ class AdvisorMixin:
         button.configure(
             text="Add to slip",
             command=lambda: self.add_winner_candidate_to_slip(
-                candidate, winner_odds, value
+                candidate, winner_odds, value, source
             ),
         )
 
-    def add_winner_candidate_to_slip(self, candidate, winner_odds, value):
+    def add_winner_candidate_to_slip(
+        self, candidate, winner_odds, value, source="manual"
+    ):
         event_id = candidate.get("event_id")
         event_key = (
             str(event_id)
@@ -231,12 +341,13 @@ class AdvisorMixin:
             else str(candidate["match"]).replace(" vs ", "|")
         )
         odds_column = str(candidate["odds_column"])
-        identity = (event_key, "Winner (manual)", odds_column)
+        bookmaker = "Winner (auto)" if source == "auto" else "Winner (manual)"
+        identity = (event_key, bookmaker, odds_column)
         self.selected_bets[event_key] = {
             "identity": identity,
             "match": str(candidate["match"]),
             "selection": str(candidate["selection"]),
-            "bookmaker": "Winner (manual)",
+            "bookmaker": bookmaker,
             "odds": float(winner_odds),
             "fair_odds": float(candidate["consensus_fair_odds"]),
             "consensus_value": float(value),

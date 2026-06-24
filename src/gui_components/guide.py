@@ -262,6 +262,28 @@ class GuideMixin:
                 "and below -3% a Poor price."
             ),
         },
+        {
+            "title": "Winner auto-sync",
+            "summary": (
+                "A background request to Winner's public full-time 1/X/2 line that "
+                "fills matched Advisor prices without blocking the interface."
+            ),
+            "example": (
+                "The status beside the odds timestamp reports syncing, the number "
+                "matched, or that manual entry is required."
+            ),
+        },
+        {
+            "title": "Fuzzy team matching",
+            "summary": (
+                "A similarity check used to align international English team names "
+                "with Winner's Hebrew names and minor spelling variations."
+            ),
+            "example": (
+                "Example: Netherlands can match הולנד through the alias map. "
+                "A price is inserted only when both teams pass the confidence threshold."
+            ),
+        },
     )
 
     def build_guide_tab(self):

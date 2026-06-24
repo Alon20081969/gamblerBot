@@ -279,15 +279,24 @@ class GamblerBotGUI(
         )
         self.scan_button.grid(row=1, column=2, sticky="w", padx=(0, 10), pady=(0, 8))
 
+        sync_status_frame = ctk.CTkFrame(self.top_frame, fg_color="transparent")
+        sync_status_frame.grid(
+            row=1, column=3, sticky="w", padx=(0, 10), pady=(0, 8)
+        )
         self.scan_freshness_label = ctk.CTkLabel(
-            self.top_frame,
+            sync_status_frame,
             text="Odds: not scanned",
             text_color=self.COLORS["muted"],
             font=ctk.CTkFont(size=10),
         )
-        self.scan_freshness_label.grid(
-            row=1, column=3, sticky="w", padx=(0, 10), pady=(0, 8)
+        self.scan_freshness_label.pack(side="left")
+        self.winner_sync_label = ctk.CTkLabel(
+            sync_status_frame,
+            text=" • Winner: waiting",
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=10),
         )
+        self.winner_sync_label.pack(side="left")
 
         self.slip_summary_button = ctk.CTkButton(
             self.top_frame,

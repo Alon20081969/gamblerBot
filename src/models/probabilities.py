@@ -346,6 +346,8 @@ class MarketAnalyzer:
 
                 records.append({
                     "event_id": event_id,
+                    "home_team": home,
+                    "away_team": away,
                     "match": f"{home} vs {away}",
                     "selection": selection,
                     "outcome": cls.outcome_label(odds_column),
