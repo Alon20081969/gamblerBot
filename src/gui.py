@@ -9,6 +9,7 @@ import pandas as pd
 from src.gui_components import (
     BettingMixin,
     CompetitionMixin,
+    GuideMixin,
     HistoryExportMixin,
     ResultsMixin,
 )
@@ -30,7 +31,7 @@ class PageRouter:
 
 
 class GamblerBotGUI(
-    CompetitionMixin, ResultsMixin, BettingMixin, HistoryExportMixin, ctk.CTk
+    CompetitionMixin, ResultsMixin, BettingMixin, HistoryExportMixin, GuideMixin, ctk.CTk
 ):
     """Application shell coordinating the API, worker threads, and UI components."""
 
@@ -110,7 +111,7 @@ class GamblerBotGUI(
     def create_widgets(self):
         self.page_names = [
             "Competitions", "Results", "Best", "Bet Slip", "Calculator",
-            "History", "Console", "Settings",
+            "History", "Console", "Guide", "Settings",
         ]
         self._build_top_controls()
         self.content_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -141,6 +142,7 @@ class GamblerBotGUI(
         self.calculator_tab = self.pages["Calculator"]
         self.history_tab = self.pages["History"]
         self.console_tab = self.pages["Console"]
+        self.guide_tab = self.pages["Guide"]
         self.settings_tab = self.pages["Settings"]
 
         self.build_competition_browser(self.competitions_tab)
@@ -148,6 +150,7 @@ class GamblerBotGUI(
         self.build_betting_tabs()
         self.build_history_tab()
         self._build_console_tab()
+        self.build_guide_tab()
         self._build_settings_tab()
         self.show_page("Results")
         self.write_to_terminal(
@@ -205,6 +208,7 @@ class GamblerBotGUI(
             "Calculator": "Calc",
             "History": "History",
             "Console": "Console",
+            "Guide": "Guide",
             "Settings": "Settings",
         }
         for page_name in self.page_names:
@@ -212,7 +216,7 @@ class GamblerBotGUI(
                 nav_frame,
                 text=nav_labels[page_name],
                 command=lambda name=page_name: self.show_page(name),
-                width=84,
+                width=72,
                 height=30,
                 corner_radius=8,
                 fg_color="transparent",

@@ -3,6 +3,13 @@
 from .betting import BettingMixin
 from .catalog import CompetitionMixin
 from .history import HistoryExportMixin
+from .guide import GuideMixin
 from .results import ResultsMixin
 
-__all__ = ["BettingMixin", "CompetitionMixin", "HistoryExportMixin", "ResultsMixin"]
+__all__ = [
+    "BettingMixin",
+    "CompetitionMixin",
+    "GuideMixin",
+    "HistoryExportMixin",
+    "ResultsMixin",
+]
