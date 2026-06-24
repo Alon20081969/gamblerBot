@@ -248,6 +248,14 @@ class AdvisorMixin:
             border_color=self.COLORS["border_light"],
         )
         odds_entry.grid(row=1, column=0, padx=(0, 6))
+        trend_label = ctk.CTkLabel(
+            controls,
+            text="",
+            width=24,
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=15, weight="bold"),
+        )
+        trend_label.grid(row=1, column=1, padx=(0, 4))
         verdict = ctk.CTkLabel(
             controls,
             text="Enter Winner's price",
@@ -256,7 +264,18 @@ class AdvisorMixin:
             text_color=self.COLORS["muted"],
             font=ctk.CTkFont(size=10, weight="bold"),
         )
-        verdict.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(5, 0))
+        verdict.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(5, 0))
+        history_label = ctk.CTkLabel(
+            controls,
+            text="Open: —  •  Prev: —",
+            width=190,
+            anchor="w",
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=9),
+        )
+        history_label.grid(
+            row=3, column=0, columnspan=3, sticky="ew", pady=(2, 0)
+        )
         source_label = ctk.CTkLabel(
             controls,
             text="Waiting for Winner sync",
@@ -265,7 +284,7 @@ class AdvisorMixin:
             text_color=self.COLORS["muted"],
             font=ctk.CTkFont(size=9),
         )
-        source_label.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(2, 0))
+        source_label.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(2, 0))
         add_button = ctk.CTkButton(
             controls,
             text="Evaluate",
@@ -274,7 +293,7 @@ class AdvisorMixin:
                 candidate, odds_entry, verdict, add_button
             ),
         )
-        add_button.grid(row=1, column=1)
+        add_button.grid(row=1, column=2)
         odds_entry.bind(
             "<Return>",
             lambda _event: self.evaluate_winner_candidate(
@@ -298,6 +317,8 @@ class AdvisorMixin:
                 "verdict": verdict,
                 "button": add_button,
                 "source_label": source_label,
+                "trend_label": trend_label,
+                "history_label": history_label,
                 "card": card,
                 "rank_label": rank_label,
                 "matched": None,
@@ -355,6 +376,10 @@ class AdvisorMixin:
     def _apply_winner_sync(self, generation, result, matches):
         if generation != self.winner_sync_generation:
             return
+        if result.warning:
+            self.write_to_terminal(f"[!] {result.warning}")
+        if result.error:
+            self.write_to_terminal(f"[!] Winner sync failed: {result.error}")
         populated = 0
         for control in self.advisor_controls:
             if control.get("price_source") == "manual":
@@ -374,9 +399,27 @@ class AdvisorMixin:
                     continue
                 control["matched"] = True
                 control["price_source"] = "auto"
+                odds_column = str(control["candidate"].get("odds_column"))
+                previous = winner_match.previous_for(odds_column)
+                opening = winner_match.opening_for(odds_column)
+                trend = winner_match.trend_for(odds_column)
+                arrow, trend_color = self.winner_trend_display(
+                    winner_odd, previous, trend
+                )
+                control["trend_label"].configure(
+                    text=arrow,
+                    text_color=trend_color,
+                )
+                control["history_label"].configure(
+                    text=(
+                        f"Open: {self.winner_price_text(opening)}  •  "
+                        f"Prev: {self.winner_price_text(previous)}"
+                    )
+                )
                 control["source_label"].configure(
                     text=(
-                        f"Matched {winner_match.home_team} - "
+                        f"{winner_match.source} • "
+                        f"{winner_match.home_team} - "
                         f"{winner_match.away_team} ({score:.0%})"
                     ),
                     text_color=self.COLORS["success"],
@@ -405,7 +448,16 @@ class AdvisorMixin:
                 )
             )
         else:
-            status = f" • Winner synced {populated}/{len(self.advisor_controls)}"
+            source_name = (
+                "365Scores"
+                if "365scores" in result.source_url.casefold()
+                else "Winner fallback"
+            )
+            cache_note = " cached" if result.from_cache else ""
+            status = (
+                f" • {source_name}{cache_note} "
+                f"{populated}/{len(self.advisor_controls)}"
+            )
             color = self.COLORS["success"] if populated else self.COLORS["warning"]
             if populated:
                 self.advisor_status.configure(
@@ -426,6 +478,29 @@ class AdvisorMixin:
             self.winner_sync_label.configure(text=status, text_color=color)
         self.apply_advisor_filters()
 
+    def winner_trend_display(self, current, previous, trend):
+        try:
+            current_value = float(current)
+            previous_value = float(previous)
+            if current_value > previous_value:
+                return "↑", self.COLORS["success"]
+            if current_value < previous_value:
+                return "↓", self.COLORS["danger"]
+            return "→", self.COLORS["muted"]
+        except (TypeError, ValueError):
+            if trend == 3:
+                return "↑", self.COLORS["success"]
+            if trend == 1:
+                return "↓", self.COLORS["danger"]
+            return "→", self.COLORS["muted"]
+
+    @staticmethod
+    def winner_price_text(value):
+        try:
+            return f"{float(value):.2f}"
+        except (TypeError, ValueError):
+            return "—"
+
     def mark_winner_entry_edited(
         self, candidate, odds_entry, verdict, button, source_label
     ):
@@ -442,6 +517,13 @@ class AdvisorMixin:
                 control["matched"] = True
                 control["winner_value"] = None
                 control["price_source"] = "manual"
+                control["trend_label"].configure(
+                    text="",
+                    text_color=self.COLORS["muted"],
+                )
+                control["history_label"].configure(
+                    text="Open: —  •  Prev: —"
+                )
                 break
         button.configure(
             text="Evaluate",

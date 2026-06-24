@@ -3,10 +3,16 @@
 import json
 import os
 import re
+import sqlite3
+import threading
+import time
 import unicodedata
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from difflib import SequenceMatcher
+from pathlib import Path
+from contextlib import closing
 
 import requests
 from bs4 import BeautifulSoup
@@ -16,6 +22,11 @@ DEFAULT_WINNER_URL = "https://www.winner.co.il/"
 WINNER_PUBLIC_LINE_URL = (
     "https://api.winner.co.il/v2/publicapi/GetCMobileLine"
 )
+SCORES365_WINNER_URL = (
+    "https://webws.365scores.com/web/bets/lines/bestodds/"
+)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+WINNER_HISTORY_DB = PROJECT_ROOT / "data" / "winner_odds_history.sqlite3"
 
 # Winner frequently uses Hebrew display names while the global feed uses English.
 # Add aliases here as mismatches are discovered; matching remains fuzzy afterward.
@@ -91,9 +102,21 @@ AWAY_ODDS_KEYS = ("away_odds", "awayOdds", "odd2", "price2", "odds2")
 class WinnerMatch:
     home_team: str
     away_team: str
+    match_id: str | None = None
+    start_time: str | None = None
     home_odds: float | None = None
     draw_odds: float | None = None
     away_odds: float | None = None
+    home_previous_odds: float | None = None
+    draw_previous_odds: float | None = None
+    away_previous_odds: float | None = None
+    home_opening_odds: float | None = None
+    draw_opening_odds: float | None = None
+    away_opening_odds: float | None = None
+    home_trend: int | None = None
+    draw_trend: int | None = None
+    away_trend: int | None = None
+    source: str = "Winner"
 
     def odd_for(self, odds_column):
         return {
@@ -102,27 +125,189 @@ class WinnerMatch:
             "away_odds": self.away_odds,
         }.get(odds_column)
 
+    def previous_for(self, odds_column):
+        return {
+            "home_odds": self.home_previous_odds,
+            "draw_odds": self.draw_previous_odds,
+            "away_odds": self.away_previous_odds,
+        }.get(odds_column)
+
+    def opening_for(self, odds_column):
+        return {
+            "home_odds": self.home_opening_odds,
+            "draw_odds": self.draw_opening_odds,
+            "away_odds": self.away_opening_odds,
+        }.get(odds_column)
+
+    def trend_for(self, odds_column):
+        return {
+            "home_odds": self.home_trend,
+            "draw_odds": self.draw_trend,
+            "away_odds": self.away_trend,
+        }.get(odds_column)
+
 
 @dataclass(frozen=True)
 class WinnerFetchResult:
     matches: tuple[WinnerMatch, ...]
     source_url: str
     error: str | None = None
+    warning: str | None = None
+    from_cache: bool = False
+
+
+class WinnerHistoryStore:
+    """Append only changed Winner prices to a local SQLite time series."""
+
+    def __init__(self, path=WINNER_HISTORY_DB):
+        self.path = Path(path)
+
+    def record_matches(self, matches):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(self.path)) as connection:
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS winner_odds_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    recorded_at TEXT NOT NULL,
+                    match_id TEXT NOT NULL,
+                    home_team TEXT NOT NULL,
+                    away_team TEXT NOT NULL,
+                    start_time TEXT,
+                    outcome TEXT NOT NULL,
+                    current_odds REAL NOT NULL,
+                    previous_odds REAL,
+                    opening_odds REAL,
+                    trend INTEGER,
+                    source TEXT NOT NULL
+                )
+            """)
+            connection.execute("""
+                CREATE INDEX IF NOT EXISTS idx_winner_history_lookup
+                ON winner_odds_history(match_id, outcome, id)
+            """)
+            now = datetime.now(timezone.utc).isoformat()
+            for match in matches:
+                match_id = match.match_id or (
+                    f"{normalize_team(match.home_team)}|"
+                    f"{normalize_team(match.away_team)}"
+                )
+                for outcome, column in (
+                    ("home", "home_odds"),
+                    ("draw", "draw_odds"),
+                    ("away", "away_odds"),
+                ):
+                    current = match.odd_for(column)
+                    if current is None:
+                        continue
+                    last = connection.execute(
+                        """
+                        SELECT current_odds
+                        FROM winner_odds_history
+                        WHERE match_id = ? AND outcome = ?
+                        ORDER BY id DESC LIMIT 1
+                        """,
+                        (str(match_id), outcome),
+                    ).fetchone()
+                    if last and abs(float(last[0]) - float(current)) < 0.0001:
+                        continue
+                    connection.execute(
+                        """
+                        INSERT INTO winner_odds_history (
+                            recorded_at, match_id, home_team, away_team,
+                            start_time, outcome, current_odds, previous_odds,
+                            opening_odds, trend, source
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            now,
+                            str(match_id),
+                            match.home_team,
+                            match.away_team,
+                            match.start_time,
+                            outcome,
+                            float(current),
+                            match.previous_for(column),
+                            match.opening_for(column),
+                            match.trend_for(column),
+                            match.source,
+                        ),
+                    )
+            connection.commit()
 
 
 class WinnerOddsFetcher:
     """Retrieve public Winner listings without bypassing access controls."""
 
-    def __init__(self, url=None, timeout=12):
+    COOLDOWN_SECONDS = 30
+    _fetch_lock = threading.Lock()
+    _last_fetch_at = 0.0
+    _cached_result = None
+
+    def __init__(self, url=None, timeout=12, history_store=None):
         configured_url = url or os.getenv("WINNER_ODDS_URL")
         self.url = configured_url or WINNER_PUBLIC_LINE_URL
         self.uses_public_line_api = configured_url is None
         self.timeout = timeout
+        self.history_store = history_store or WinnerHistoryStore()
 
     def fetch(self):
-        if self.uses_public_line_api:
-            return self._fetch_public_line()
+        with self._fetch_lock:
+            elapsed = time.monotonic() - self.__class__._last_fetch_at
+            cached = self.__class__._cached_result
+            if cached is not None and elapsed < self.COOLDOWN_SECONDS:
+                return WinnerFetchResult(
+                    cached.matches,
+                    cached.source_url,
+                    cached.error,
+                    cached.warning,
+                    True,
+                )
 
+            if self.uses_public_line_api:
+                primary = self._fetch_365scores()
+                if primary.error is None:
+                    result = primary
+                else:
+                    fallback = self._fetch_public_line()
+                    if fallback.error is None:
+                        result = WinnerFetchResult(
+                            fallback.matches,
+                            fallback.source_url,
+                            warning=(
+                                f"365Scores sync failed ({primary.error}); "
+                                "direct Winner fallback succeeded."
+                            ),
+                        )
+                    else:
+                        result = WinnerFetchResult(
+                            (),
+                            primary.source_url,
+                            error=(
+                                f"365Scores failed: {primary.error}; "
+                                f"Winner fallback failed: {fallback.error}"
+                            ),
+                        )
+            else:
+                result = self._fetch_configured_source()
+
+            if result.matches:
+                try:
+                    self.history_store.record_matches(result.matches)
+                except (OSError, sqlite3.Error) as exc:
+                    result = WinnerFetchResult(
+                        result.matches,
+                        result.source_url,
+                        result.error,
+                        (
+                            f"{result.warning + ' ' if result.warning else ''}"
+                            f"Winner history logging failed: {exc}"
+                        ),
+                    )
+            self.__class__._last_fetch_at = time.monotonic()
+            self.__class__._cached_result = result
+            return result
+
+    def _fetch_configured_source(self):
         headers = {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -158,6 +343,117 @@ class WinnerOddsFetcher:
                 self.url,
                 f"Winner response could not be parsed: {exc}",
             )
+
+    def _fetch_365scores(self):
+        params = {
+            "sport": 1,
+            "lineType": 1,
+            "minGames": 1,
+            "maxGames": 500,
+            "context": "dashboard",
+            "withCompetitionFilter": "true",
+            "appTypeId": 5,
+            "langId": 10,
+            "timezoneName": "Asia/Jerusalem",
+            "userCountryId": 6,
+        }
+        try:
+            response = requests.get(
+                SCORES365_WINNER_URL,
+                params=params,
+                headers={
+                    "User-Agent": "Mozilla/5.0",
+                    "Accept": "application/json",
+                    "Origin": "https://www.365scores.com",
+                    "Referer": "https://www.365scores.com/",
+                },
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            matches = self.parse_365scores(response.json())
+            if not matches:
+                return WinnerFetchResult(
+                    (),
+                    SCORES365_WINNER_URL,
+                    "unexpected schema or no Winner full-time odds",
+                )
+            return WinnerFetchResult(tuple(matches), SCORES365_WINNER_URL)
+        except requests.RequestException as exc:
+            return WinnerFetchResult(
+                (), SCORES365_WINNER_URL, f"request failed: {exc}"
+            )
+        except (TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
+            return WinnerFetchResult(
+                (), SCORES365_WINNER_URL, f"schema parse failed: {exc}"
+            )
+
+    @classmethod
+    def parse_365scores(cls, payload):
+        games = {
+            str(game.get("id")): game
+            for game in payload.get("games", [])
+            if isinstance(game, dict) and game.get("id") is not None
+        }
+        matches = []
+        for line in payload.get("lines", []):
+            if (
+                not isinstance(line, dict)
+                or int(line.get("bookmakerId", -1)) != 1
+                or int(line.get("lineTypeId", -1)) != 1
+            ):
+                continue
+            game = games.get(str(line.get("gameId")))
+            if not game:
+                continue
+            home = (game.get("homeCompetitor") or {}).get("name")
+            away = (game.get("awayCompetitor") or {}).get("name")
+            if not home or not away:
+                continue
+
+            values = {}
+            for option in line.get("options", []):
+                if not isinstance(option, dict):
+                    continue
+                name = str(option.get("name", "")).casefold()
+                column = {"1": "home", "x": "draw", "2": "away"}.get(name)
+                if not column:
+                    continue
+                values[f"{column}_odds"] = cls._decimal_from_rate(
+                    option.get("rate")
+                )
+                values[f"{column}_previous_odds"] = cls._decimal_from_rate(
+                    option.get("oldRate")
+                )
+                values[f"{column}_opening_odds"] = cls._decimal_from_rate(
+                    option.get("originalRate")
+                )
+                values[f"{column}_trend"] = cls._safe_int(option.get("trend"))
+
+            if values.get("home_odds") and values.get("away_odds"):
+                matches.append(
+                    WinnerMatch(
+                        home_team=str(home),
+                        away_team=str(away),
+                        match_id=str(game.get("id")),
+                        start_time=game.get("startTime"),
+                        source="365Scores",
+                        **values,
+                    )
+                )
+        return cls._deduplicate(matches)
+
+    @classmethod
+    def _decimal_from_rate(cls, rate):
+        if isinstance(rate, dict):
+            return cls._odd_from_value(rate.get("decimal"))
+        return cls._odd_from_value(rate)
+
+    @staticmethod
+    def _safe_int(value):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     def _fetch_public_line(self):
         user_agent = (
@@ -291,11 +587,13 @@ class WinnerOddsFetcher:
             if home_odds and away_odds:
                 matches.append(
                     WinnerMatch(
-                        home,
-                        away,
-                        home_odds,
-                        draw_odds,
-                        away_odds,
+                        home_team=home,
+                        away_team=away,
+                        match_id=str(market.get("eId")) if market.get("eId") else None,
+                        home_odds=home_odds,
+                        draw_odds=draw_odds,
+                        away_odds=away_odds,
+                        source="Winner direct",
                     )
                 )
         return cls._deduplicate(matches)
@@ -364,7 +662,13 @@ class WinnerOddsFetcher:
 
         if not any((home_odds, draw_odds, away_odds)):
             return None
-        return WinnerMatch(home, away, home_odds, draw_odds, away_odds)
+        return WinnerMatch(
+            home_team=home,
+            away_team=away,
+            home_odds=home_odds,
+            draw_odds=draw_odds,
+            away_odds=away_odds,
+        )
 
     @classmethod
     def _match_from_html_card(cls, card):

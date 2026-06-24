@@ -338,6 +338,48 @@ class GuideMixin:
                 "22:00, or a team name."
             ),
         },
+        {
+            "title": "Opening Winner odds",
+            "summary": (
+                "The first Winner price supplied for an outcome in the current "
+                "365Scores market record."
+            ),
+            "example": (
+                "Open 1.35 and current 1.25 means Winner shortened the price since "
+                "the market was first recorded."
+            ),
+        },
+        {
+            "title": "Previous Winner odds",
+            "summary": (
+                "The Winner price immediately before the current price update."
+            ),
+            "example": (
+                "Prev 1.30 and current 1.25 produces a downward arrow because the "
+                "available payout decreased."
+            ),
+        },
+        {
+            "title": "Winner price trend",
+            "summary": (
+                "A quick comparison between the current and previous Winner prices."
+            ),
+            "example": (
+                "↑ means the payout increased, ↓ means it decreased, and → means "
+                "no detected change."
+            ),
+        },
+        {
+            "title": "Local Winner history",
+            "summary": (
+                "A SQLite time series stored locally whenever a Winner outcome price "
+                "changes between app scans."
+            ),
+            "example": (
+                "Repeated unchanged scans add no duplicates. A changed home, draw, "
+                "or away price creates one timestamped history point."
+            ),
+        },
     )
 
     def build_guide_tab(self):
