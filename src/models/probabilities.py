@@ -67,6 +67,76 @@ class MarketAnalyzer:
         median_lift = max(0.0, highest - median)
         return round((spread / lowest * 70) + (median_lift / median * 30), 2)
 
+    @classmethod
+    def consensus_probabilities(cls, game_df):
+        """
+        Estimate fair outcome probabilities from the bookmaker market.
+
+        Each bookmaker's implied probabilities are normalized first, removing
+        its margin (vig). The median normalized probability is then taken for
+        each outcome and normalized once more so the final market sums to 100%.
+        """
+        if game_df is None or game_df.empty:
+            return {}, 0
+
+        active_columns = [
+            column
+            for column in cls.ODDS_COLUMNS
+            if column in game_df and game_df[column].notna().any()
+        ]
+        if len(active_columns) < 2:
+            return {}, 0
+
+        estimates = {column: [] for column in active_columns}
+        complete_market_count = 0
+        for _, bookmaker_row in game_df.iterrows():
+            odds = {
+                column: cls.safe_decimal(bookmaker_row.get(column))
+                for column in active_columns
+            }
+            if any(odds[column] is None for column in active_columns):
+                continue
+
+            implied_total = sum(1 / odds[column] for column in active_columns)
+            if implied_total <= 0:
+                continue
+            complete_market_count += 1
+            for column in active_columns:
+                estimates[column].append((1 / odds[column]) / implied_total)
+
+        if not complete_market_count:
+            return {}, 0
+
+        consensus = {
+            column: float(pd.Series(values).median())
+            for column, values in estimates.items()
+            if values
+        }
+        consensus_total = sum(consensus.values())
+        if consensus_total <= 0:
+            return {}, 0
+        return {
+            column: probability / consensus_total
+            for column, probability in consensus.items()
+        }, complete_market_count
+
+    @staticmethod
+    def value_edge_pct(best_odds, consensus_probability):
+        """
+        Return expected value per 100 staked using the market consensus.
+
+        For example, +12 means the offered odds pay 12% more than the
+        margin-free consensus estimate. It is a pricing signal, not a forecast.
+        """
+        try:
+            odds = float(best_odds)
+            probability = float(consensus_probability)
+        except (TypeError, ValueError):
+            return None
+        if odds <= 1.0 or probability <= 0 or probability >= 1:
+            return None
+        return round(((odds * probability) - 1) * 100, 2)
+
     @staticmethod
     def metadata_from_event(raw_event_data):
         """Extract safe display metadata from a raw Odds API event."""
@@ -167,6 +237,7 @@ class MarketAnalyzer:
         records = []
         group_cols = ["event_id", "home_team", "away_team"]
         for (event_id, home, away), game_df in df.groupby(group_cols, dropna=False):
+            consensus, consensus_bookmakers = cls.consensus_probabilities(game_df)
             for odds_column in cls.ODDS_COLUMNS:
                 if odds_column not in game_df:
                     continue
@@ -179,6 +250,15 @@ class MarketAnalyzer:
                 median = float(valid[odds_column].median())
                 best_odds = float(highest[odds_column])
                 worst_odds = float(lowest[odds_column])
+                consensus_probability = consensus.get(odds_column)
+                fair_odds = (
+                    round(1 / consensus_probability, 2)
+                    if consensus_probability
+                    else None
+                )
+                value_score = cls.value_edge_pct(
+                    best_odds, consensus_probability
+                )
 
                 if odds_column == "home_odds":
                     selection = home
@@ -199,6 +279,14 @@ class MarketAnalyzer:
                     "worst_bookmaker": str(lowest["bookmaker"]),
                     "median_odds": round(median, 2),
                     "best_implied_pct": cls.implied_probability_pct(best_odds),
+                    "consensus_probability_pct": (
+                        round(consensus_probability * 100, 2)
+                        if consensus_probability
+                        else None
+                    ),
+                    "consensus_fair_odds": fair_odds,
+                    "consensus_bookmakers": consensus_bookmakers,
+                    "value_score": value_score,
                     "spread_pct": cls.odds_spread_pct(best_odds, worst_odds),
                     "opportunity_score": cls.opportunity_score(
                         best_odds, worst_odds, median
@@ -240,6 +328,16 @@ class MarketAnalyzer:
             enriched.loc[mask, f"{prefix}_worst_bookmaker"] = row["worst_bookmaker"]
             enriched.loc[mask, f"{prefix}_spread_pct"] = row["spread_pct"]
             enriched.loc[mask, f"{prefix}_opportunity_score"] = row["opportunity_score"]
+            enriched.loc[mask, f"{prefix}_consensus_probability_pct"] = (
+                row["consensus_probability_pct"]
+            )
+            enriched.loc[mask, f"{prefix}_consensus_fair_odds"] = (
+                row["consensus_fair_odds"]
+            )
+            enriched.loc[mask, f"{prefix}_consensus_bookmakers"] = (
+                row["consensus_bookmakers"]
+            )
+            enriched.loc[mask, f"{prefix}_value_score"] = row["value_score"]
 
         return enriched
 
@@ -255,4 +353,8 @@ class MarketAnalyzer:
             return summary
         return summary[
             summary["spread_pct"].fillna(0) >= float(minimum_spread_pct)
-        ].sort_values("opportunity_score", ascending=False)
+        ].sort_values(
+            ["value_score", "opportunity_score"],
+            ascending=False,
+            na_position="last",
+        )

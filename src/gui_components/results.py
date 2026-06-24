@@ -75,7 +75,7 @@ class ResultsMixin:
         header.grid(row=0, column=0, sticky="ew", padx=8, pady=(6, 8))
         self.best_title = ctk.CTkLabel(
             header,
-            text="Best opportunities",
+            text="Best value opportunities",
             font=ctk.CTkFont(size=18, weight="bold"),
             text_color=self.COLORS["text"],
         )
@@ -91,7 +91,7 @@ class ResultsMixin:
         ).pack(side="right")
         self.best_sort_dropdown = ctk.CTkComboBox(
             header,
-            values=["Highest score first", "Lowest score first"],
+            values=["Highest value first", "Lowest value first"],
             state="readonly",
             width=180,
             height=34,
@@ -101,14 +101,14 @@ class ResultsMixin:
             button_hover_color=self.COLORS["accent"],
             command=lambda _value: self.rerender_best_opportunities(),
         )
-        self.best_sort_dropdown.set("Highest score first")
+        self.best_sort_dropdown.set("Highest value first")
         self.best_sort_dropdown.pack(side="right", padx=(0, 8))
         self.best_status = ctk.CTkLabel(
             self.best_tab,
             text=(
-                "Leaderboard shows every outcome candidate from the latest scan. "
-                "Sort by high or low opportunity score. "
-                "It is a price signal, not a prediction."
+                "Value score compares the best available odd with a margin-free "
+                "consensus from all complete bookmaker markets. +10 means the price "
+                "is 10% above consensus value. It is not a prediction."
             ),
             anchor="w",
             text_color=self.COLORS["muted"],
@@ -171,22 +171,27 @@ class ResultsMixin:
             widget.destroy()
         opportunities = MarketAnalyzer.find_discrepancies(df, minimum_spread_pct=0)
         if opportunities.empty:
-            self.best_title.configure(text="Best opportunities - 0")
+            self.best_title.configure(text="Best value opportunities - 0")
             self.show_best_opportunities_message(
                 "No opportunity data is available for this scan."
             )
             return
         sort_lowest_first = (
             hasattr(self, "best_sort_dropdown")
-            and self.best_sort_dropdown.get() == "Lowest score first"
+            and self.best_sort_dropdown.get() == "Lowest value first"
         )
         opportunities = opportunities.sort_values(
-            ["opportunity_score", "spread_pct"],
-            ascending=[sort_lowest_first, sort_lowest_first],
+            ["value_score", "opportunity_score", "spread_pct"],
+            ascending=[
+                sort_lowest_first,
+                sort_lowest_first,
+                sort_lowest_first,
+            ],
+            na_position="last",
         )
         direction = "lowest first" if sort_lowest_first else "highest first"
         self.best_title.configure(
-            text=f"Best opportunities - {len(opportunities)} shown ({direction})"
+            text=f"Best value opportunities - {len(opportunities)} shown ({direction})"
         )
         for rank, (_, row) in enumerate(opportunities.iterrows(), start=1):
             self.create_opportunity_card(rank, row)
@@ -229,11 +234,12 @@ class ResultsMixin:
         widget.bind("<Button-1>", lambda _event, pick=row: self.add_opportunity_to_slip(pick))
 
     def create_opportunity_card(self, rank, row):
-        score = float(row.get("opportunity_score") or 0)
+        value_score = row.get("value_score")
+        score = float(value_score) if pd.notna(value_score) else 0.0
         color = (
-            self.COLORS["success"] if score >= 8
-            else self.COLORS["warning"] if score >= 4
-            else self.COLORS["muted"]
+            self.COLORS["success"] if score >= 5
+            else self.COLORS["warning"] if score >= 0
+            else self.COLORS["danger"]
         )
         card = ctk.CTkFrame(
             self.best_results,
@@ -265,9 +271,10 @@ class ResultsMixin:
         self.make_opportunity_card_clickable(title_label, row)
         detail = (
             f"{row['outcome']} @ {row['best_odds']:.2f} at {row['best_bookmaker']}   |   "
-            f"Market low {row['worst_odds']:.2f} at {row['worst_bookmaker']}   |   "
-            f"Disagreement {self.format_metric(row.get('spread_pct'), '%')}   |   "
-            f"Implied chance {self.format_metric(row.get('best_implied_pct'), '%')}"
+            f"Fair odds {self.format_metric(row.get('consensus_fair_odds'))}   |   "
+            f"Consensus chance "
+            f"{self.format_metric(row.get('consensus_probability_pct'), '%')}   |   "
+            f"{int(row.get('consensus_bookmakers') or 0)} bookmakers"
         )
         detail_label = ctk.CTkLabel(
             card,
@@ -280,7 +287,7 @@ class ResultsMixin:
         self.make_opportunity_card_clickable(detail_label, row)
         score_label = ctk.CTkLabel(
             card,
-            text=f"Score\n{score:.2f}",
+            text=f"Value\n{score:+.2f}%",
             text_color=color,
             font=ctk.CTkFont(size=12, weight="bold"),
             justify="center",
@@ -503,10 +510,14 @@ class ResultsMixin:
         if pd.isna(spread):
             spread = ((highest_odds - lowest_odds) / lowest_odds) * 100 if lowest_odds else None
         score = highest.get(f"{prefix}_opportunity_score")
+        value_score = highest.get(f"{prefix}_value_score")
+        fair_odds = highest.get(f"{prefix}_consensus_fair_odds")
         return (
             f"Implied chance: {self.format_metric(implied, '%')}   |   "
             f"Bookmaker spread: {self.format_metric(spread, '%')}   |   "
-            f"Opportunity score: {self.format_metric(score)}"
+            f"Fair odds: {self.format_metric(fair_odds)}   |   "
+            f"Consensus value: {self.format_metric(value_score, '%')}   |   "
+            f"Price disagreement: {self.format_metric(score)}"
         )
 
     @staticmethod
