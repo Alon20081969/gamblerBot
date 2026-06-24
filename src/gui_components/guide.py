@@ -424,6 +424,50 @@ class GuideMixin:
                 "it from Results, Best, Advisor, and new history records."
             ),
         },
+        {
+            "title": "Team Form Score",
+            "summary": (
+                "Points earned across a team's five most recent completed matches: "
+                "3 for a win, 1 for a draw, and 0 for a loss."
+            ),
+            "formula": "Maximum: 5 wins x 3 points = 15",
+            "example": (
+                "Results W-W-D-L-W produce 3 + 3 + 1 + 0 + 3 = 10/15."
+            ),
+        },
+        {
+            "title": "Form Differential",
+            "summary": (
+                "The suggested team's Form Score minus its opponent's Form Score."
+            ),
+            "formula": "Suggested team score - opponent score",
+            "example": (
+                "Suggested team 4/15 and opponent 11/15 gives -7. "
+                "A result below -5 triggers the form penalty."
+            ),
+        },
+        {
+            "title": "Adjusted safety chance",
+            "summary": (
+                "An Advisor-only risk check derived from consensus chance and recent "
+                "form. It does not replace or rewrite the bookmaker consensus."
+            ),
+            "example": (
+                "A 68% consensus chance with a -7 Form Differential receives a "
+                "5-point penalty, becoming 63% for the relative-risk label."
+            ),
+        },
+        {
+            "title": "Form Alert",
+            "summary": (
+                "A warning shown when poor recent form pushes a selection from Lower "
+                "relative risk below the 65% threshold."
+            ),
+            "example": (
+                "The card is demoted to Moderate risk while its original consensus "
+                "chance remains visible for transparency."
+            ),
+        },
     )
 
     def build_guide_tab(self):

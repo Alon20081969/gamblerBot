@@ -9,7 +9,9 @@ from src.ingestion.winner_fetcher import (
     WinnerHistoryStore,
     WinnerOddsFetcher,
     match_winner_game,
+    team_similarity,
 )
+from src.models.form_analyzer import FormAnalyzer
 from src.models.probabilities import MarketAnalyzer
 
 
@@ -204,7 +206,7 @@ class AdvisorMixin:
             text_color=risk_color,
             font=ctk.CTkFont(size=18, weight="bold"),
         )
-        rank_label.grid(row=0, column=0, rowspan=3, padx=(12, 4), pady=12)
+        rank_label.grid(row=0, column=0, rowspan=4, padx=(12, 4), pady=12)
 
         ctk.CTkLabel(
             card,
@@ -228,7 +230,7 @@ class AdvisorMixin:
             font=ctk.CTkFont(size=11),
         ).grid(row=1, column=1, sticky="ew", padx=8, pady=2)
 
-        ctk.CTkLabel(
+        risk_label = ctk.CTkLabel(
             card,
             text=(
                 f"{risk} relative risk: this is the market's most likely outcome "
@@ -237,10 +239,20 @@ class AdvisorMixin:
             anchor="w",
             text_color=risk_color,
             font=ctk.CTkFont(size=11, weight="bold"),
-        ).grid(row=2, column=1, sticky="ew", padx=8, pady=(2, 12))
+        )
+        risk_label.grid(row=2, column=1, sticky="ew", padx=8, pady=(2, 2))
+
+        form_label = ctk.CTkLabel(
+            card,
+            text="Recent form: waiting for a matched 365Scores fixture...",
+            anchor="w",
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=10),
+        )
+        form_label.grid(row=3, column=1, sticky="ew", padx=8, pady=(2, 12))
 
         controls = ctk.CTkFrame(card, fg_color="transparent")
-        controls.grid(row=0, column=2, rowspan=3, padx=12, pady=10)
+        controls.grid(row=0, column=2, rowspan=4, padx=12, pady=10)
         ctk.CTkLabel(
             controls,
             text="Winner odd:",
@@ -330,7 +342,7 @@ class AdvisorMixin:
             border_color=self.COLORS["border"],
         )
         history_frame.grid(
-            row=3,
+            row=4,
             column=0,
             columnspan=3,
             sticky="ew",
@@ -376,6 +388,8 @@ class AdvisorMixin:
             "history_canvas": history_canvas,
             "card": card,
             "rank_label": rank_label,
+            "risk_label": risk_label,
+            "form_label": form_label,
             "matched": None,
             "winner_value": None,
             "price_source": None,
@@ -383,6 +397,9 @@ class AdvisorMixin:
             "winner_fetched_at": None,
             "winner_match_id": None,
             "winner_outcome": None,
+            "adjusted_risk": risk,
+            "adjusted_safety_chance": chance,
+            "form_differential": None,
         }
         history_button.configure(
             command=lambda selected=control: self.toggle_winner_history(selected)
@@ -583,12 +600,161 @@ class AdvisorMixin:
         if hasattr(self, "winner_sync_label"):
             self.winner_sync_label.configure(text=status, text_color=color)
         self.apply_advisor_filters()
+        self.start_team_form_sync(generation, matches)
         self.after(
             30_000,
             lambda current_generation=generation: (
                 self.refresh_winner_freshness(current_generation)
             ),
         )
+
+    def start_team_form_sync(self, generation, matches):
+        eligible = []
+        for control, _winner_odd, _score, winner_match in matches:
+            if (
+                winner_match is None
+                or winner_match.source != "365Scores"
+                or not winner_match.match_id
+            ):
+                continue
+            control["form_label"].configure(
+                text="Recent form: syncing last 5 matches...",
+                text_color=self.COLORS["warning"],
+            )
+            eligible.append((control, winner_match))
+        if not eligible:
+            return
+        threading.Thread(
+            target=self._team_form_worker,
+            args=(generation, eligible),
+            daemon=True,
+        ).start()
+
+    def _team_form_worker(self, generation, eligible):
+        analyzer = FormAnalyzer()
+        for control, winner_match in eligible:
+            if generation != self.winner_sync_generation:
+                return
+            result = analyzer.fetch_match(winner_match.match_id)
+            self.post_to_ui(
+                self._apply_team_form,
+                generation,
+                control,
+                result,
+            )
+
+    def _apply_team_form(self, generation, control, result):
+        if generation != self.winner_sync_generation:
+            return
+        try:
+            if not control["card"].winfo_exists():
+                return
+        except tkinter.TclError:
+            return
+
+        candidate = control["candidate"]
+        baseline = float(candidate["consensus_probability_pct"])
+        odds_column = str(candidate.get("odds_column"))
+        if result.error or result.home is None or result.away is None:
+            control["form_label"].configure(
+                text="Recent form unavailable - no safety adjustment applied",
+                text_color=self.COLORS["muted"],
+            )
+            return
+
+        home_form, away_form = self.align_team_forms(candidate, result)
+        form_summary = (
+            f"{home_form.team_name} {home_form.score}/15 "
+            f"({''.join(home_form.results)})  •  "
+            f"{away_form.team_name} {away_form.score}/15 "
+            f"({''.join(away_form.results)})"
+        )
+        if odds_column == "draw_odds":
+            control["form_label"].configure(
+                text=f"Recent form: {form_summary} • draw receives no form penalty",
+                text_color=self.COLORS["muted"],
+            )
+            return
+
+        if odds_column == "home_odds":
+            suggested_form, opponent_form = home_form, away_form
+        else:
+            suggested_form, opponent_form = away_form, home_form
+        adjusted, differential, penalty, has_alert = (
+            FormAnalyzer.adjusted_safety(
+                baseline,
+                suggested_form,
+                opponent_form,
+            )
+        )
+        adjusted_risk = self.advisor_risk_from_chance(adjusted)
+        control["adjusted_safety_chance"] = adjusted
+        control["adjusted_risk"] = adjusted_risk
+        control["form_differential"] = differential
+        control["candidate"]["adjusted_safety_chance"] = adjusted
+        control["candidate"]["adjusted_risk"] = adjusted_risk
+        risk_color = self.advisor_risk_color(adjusted_risk)
+        demoted = (
+            str(candidate["risk_level"]) == "Lower"
+            and adjusted_risk != "Lower"
+        )
+        warning = (
+            " ⚠ Form Alert: Suggested team has poor recent form."
+            if demoted
+            else ""
+        )
+        penalty_text = (
+            f" • safety chance {baseline:.2f}% → {adjusted:.2f}%"
+            if penalty
+            else f" • safety chance stays {adjusted:.2f}%"
+        )
+        control["form_label"].configure(
+            text=(
+                f"Recent form: {form_summary} • differential "
+                f"{differential:+d}{penalty_text}{warning}"
+            ),
+            text_color=(
+                self.COLORS["danger"] if has_alert else self.COLORS["muted"]
+            ),
+        )
+        control["risk_label"].configure(
+            text=(
+                f"{adjusted_risk} relative risk after form review: "
+                "this outcome can still lose."
+                f"{warning}"
+            ),
+            text_color=risk_color,
+        )
+        control["rank_label"].configure(text_color=risk_color)
+        self.apply_advisor_filters()
+
+    def align_team_forms(self, candidate, result):
+        expected_home = str(candidate.get("home_team") or "")
+        direct = (
+            team_similarity(expected_home, result.home.team_name)
+            >= team_similarity(expected_home, result.away.team_name)
+        )
+        return (
+            (result.home, result.away)
+            if direct
+            else (result.away, result.home)
+        )
+
+    @staticmethod
+    def advisor_risk_from_chance(chance):
+        chance = float(chance)
+        if chance >= 65:
+            return "Lower"
+        if chance >= 50:
+            return "Moderate"
+        return "High"
+
+    def advisor_risk_color(self, risk):
+        return {
+            "Lower": self.COLORS["success"],
+            "Moderate": self.COLORS["warning"],
+            "High": self.COLORS["danger"],
+        }.get(str(risk), self.COLORS["muted"])
 
     def winner_trend_display(self, current, previous, trend):
         try:
@@ -942,7 +1108,11 @@ class AdvisorMixin:
             matched = control.get("matched")
             value = control.get("winner_value")
             confidence = str(candidate.get("consensus_confidence") or "Low")
-            risk = str(candidate.get("risk_level") or "High")
+            risk = str(
+                control.get("adjusted_risk")
+                or candidate.get("risk_level")
+                or "High"
+            )
 
             visible = True
             if matched is not None and matched_only and not matched:

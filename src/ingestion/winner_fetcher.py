@@ -104,6 +104,8 @@ class WinnerMatch:
     away_team: str
     match_id: str | None = None
     start_time: str | None = None
+    home_competitor_id: str | None = None
+    away_competitor_id: str | None = None
     home_odds: float | None = None
     draw_odds: float | None = None
     away_odds: float | None = None
@@ -477,6 +479,18 @@ class WinnerOddsFetcher:
                         away_team=str(away),
                         match_id=str(game.get("id")),
                         start_time=game.get("startTime"),
+                        home_competitor_id=(
+                            str((game.get("homeCompetitor") or {}).get("id"))
+                            if (game.get("homeCompetitor") or {}).get("id")
+                            is not None
+                            else None
+                        ),
+                        away_competitor_id=(
+                            str((game.get("awayCompetitor") or {}).get("id"))
+                            if (game.get("awayCompetitor") or {}).get("id")
+                            is not None
+                            else None
+                        ),
                         source="365Scores",
                         **values,
                     )
