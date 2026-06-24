@@ -511,9 +511,14 @@ class BettingMixin:
         self.update_bet_totals()
 
     def slip_market_status(self, bet):
-        if bet.get("bookmaker") == "Custom odd":
+        if bet.get("bookmaker") in {"Custom odd", "Winner (manual)"}:
+            source = (
+                "Winner price"
+                if bet.get("bookmaker") == "Winner (manual)"
+                else "Custom price"
+            )
             return (
-                "Custom price • not checked against the live market",
+                f"{source} • entered manually, not verified by the API",
                 self.COLORS["muted"],
             )
 

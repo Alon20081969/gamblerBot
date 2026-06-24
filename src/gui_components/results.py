@@ -163,6 +163,8 @@ class ResultsMixin:
         self.result_search_entry.delete(0, tk.END)
         self.render_filtered_game_results()
         self.render_best_opportunities(df)
+        if hasattr(self, "advisor_results"):
+            self.render_advisor(df)
 
     def render_best_opportunities(self, df):
         if not hasattr(self, "best_results"):

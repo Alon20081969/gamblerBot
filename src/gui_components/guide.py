@@ -229,6 +229,39 @@ class GuideMixin:
                 "Treat the stored price as stale until a later scan verifies it."
             ),
         },
+        {
+            "title": "Market favorite",
+            "summary": (
+                "The outcome with the highest margin-free consensus probability "
+                "in one game."
+            ),
+            "example": (
+                "Example: Home 68%, Draw 20%, Away 12% makes Home the market favorite. "
+                "It remains possible for Home to lose."
+            ),
+        },
+        {
+            "title": "Relative risk",
+            "summary": (
+                "A simple comparison based on consensus chance: Lower at 65% or more, "
+                "Moderate from 50% to below 65%, and High below 50%."
+            ),
+            "example": (
+                "Lower risk means more likely according to the market—not safe, certain, "
+                "or automatically worth betting."
+            ),
+        },
+        {
+            "title": "Winner price evaluation",
+            "summary": (
+                "A comparison between the manually entered Winner odd and the general "
+                "bookmaker consensus probability."
+            ),
+            "example": (
+                "The advisor calls +3% or more Favorable, -3% to +3% Roughly fair, "
+                "and below -3% a Poor price."
+            ),
+        },
     )
 
     def build_guide_tab(self):

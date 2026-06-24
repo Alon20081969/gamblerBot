@@ -453,3 +453,55 @@ class MarketAnalyzer:
             ascending=False,
             na_position="last",
         )
+
+    @classmethod
+    def advisor_candidates(cls, df):
+        """
+        Return the most likely consensus outcome in every game.
+
+        This ranks relative risk only. The actual bookmaker price must be
+        supplied before the app can evaluate whether the bet offers value.
+        """
+        summary = cls.best_worst_by_outcome(df)
+        if summary.empty:
+            return summary
+        candidates = (
+            summary.dropna(
+                subset=[
+                    "consensus_probability_pct",
+                    "consensus_fair_odds",
+                ]
+            )
+            .sort_values(
+                [
+                    "match",
+                    "consensus_probability_pct",
+                    "consensus_bookmakers",
+                ],
+                ascending=[True, False, False],
+            )
+            .groupby("match", sort=False, as_index=False)
+            .head(1)
+            .copy()
+        )
+        candidates["risk_level"] = candidates[
+            "consensus_probability_pct"
+        ].apply(
+            lambda chance: (
+                "Lower" if float(chance) >= 65
+                else "Moderate" if float(chance) >= 50
+                else "High"
+            )
+        )
+        confidence_rank = {"High": 2, "Medium": 1, "Low": 0}
+        candidates["_confidence_rank"] = candidates[
+            "consensus_confidence"
+        ].map(confidence_rank).fillna(0)
+        return candidates.sort_values(
+            [
+                "consensus_probability_pct",
+                "_confidence_rank",
+                "consensus_bookmakers",
+            ],
+            ascending=False,
+        ).drop(columns="_confidence_rank")

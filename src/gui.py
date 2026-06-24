@@ -7,6 +7,7 @@ import customtkinter as ctk
 import pandas as pd
 
 from src.gui_components import (
+    AdvisorMixin,
     BettingMixin,
     CompetitionMixin,
     GuideMixin,
@@ -31,7 +32,8 @@ class PageRouter:
 
 
 class GamblerBotGUI(
-    CompetitionMixin, ResultsMixin, BettingMixin, HistoryExportMixin, GuideMixin, ctk.CTk
+    CompetitionMixin, ResultsMixin, BettingMixin, HistoryExportMixin,
+    GuideMixin, AdvisorMixin, ctk.CTk
 ):
     """Application shell coordinating the API, worker threads, and UI components."""
 
@@ -113,7 +115,7 @@ class GamblerBotGUI(
 
     def create_widgets(self):
         self.page_names = [
-            "Competitions", "Results", "Best", "Bet Slip", "Calculator",
+            "Competitions", "Results", "Best", "Advisor", "Bet Slip", "Calculator",
             "History", "Console", "Guide", "Settings",
         ]
         self._build_top_controls()
@@ -141,6 +143,7 @@ class GamblerBotGUI(
         self.competitions_tab = self.pages["Competitions"]
         self.results_tab = self.pages["Results"]
         self.best_tab = self.pages["Best"]
+        self.advisor_tab = self.pages["Advisor"]
         self.gamble_tab = self.pages["Bet Slip"]
         self.calculator_tab = self.pages["Calculator"]
         self.history_tab = self.pages["History"]
@@ -150,6 +153,7 @@ class GamblerBotGUI(
 
         self.build_competition_browser(self.competitions_tab)
         self.build_results_tab()
+        self.build_advisor_tab()
         self.build_betting_tabs()
         self.build_history_tab()
         self._build_console_tab()
@@ -207,6 +211,7 @@ class GamblerBotGUI(
             "Competitions": "Leagues",
             "Results": "Results",
             "Best": "Best",
+            "Advisor": "Advisor",
             "Bet Slip": "Slip",
             "Calculator": "Calc",
             "History": "History",
@@ -219,7 +224,7 @@ class GamblerBotGUI(
                 nav_frame,
                 text=nav_labels[page_name],
                 command=lambda name=page_name: self.show_page(name),
-                width=72,
+                width=66,
                 height=30,
                 corner_radius=8,
                 fg_color="transparent",
