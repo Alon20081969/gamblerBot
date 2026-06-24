@@ -1,15 +1,22 @@
 import threading
 import tkinter
+from datetime import datetime, timezone
 
 import customtkinter as ctk
 import pandas as pd
 
-from src.ingestion.winner_fetcher import WinnerOddsFetcher, match_winner_game
+from src.ingestion.winner_fetcher import (
+    WinnerHistoryStore,
+    WinnerOddsFetcher,
+    match_winner_game,
+)
 from src.models.probabilities import MarketAnalyzer
 
 
 class AdvisorMixin:
     """Explain lower-risk market candidates and evaluate manual Winner prices."""
+
+    WINNER_STALE_AFTER_SECONDS = 300
 
     def build_advisor_tab(self):
         self.advisor_tab.grid_rowconfigure(3, weight=1)
@@ -285,6 +292,27 @@ class AdvisorMixin:
             font=ctk.CTkFont(size=9),
         )
         source_label.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(2, 0))
+        freshness_label = ctk.CTkLabel(
+            controls,
+            text="Freshness: waiting",
+            width=180,
+            anchor="w",
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=9, weight="bold"),
+        )
+        freshness_label.grid(
+            row=5, column=0, columnspan=2, sticky="ew", pady=(2, 0)
+        )
+        history_button = ctk.CTkButton(
+            controls,
+            text="Price chart",
+            width=82,
+            height=24,
+            state="disabled",
+            fg_color=self.COLORS["panel_alt"],
+            hover_color=self.COLORS["border_light"],
+        )
+        history_button.grid(row=5, column=2, sticky="e", pady=(4, 0))
         add_button = ctk.CTkButton(
             controls,
             text="Evaluate",
@@ -294,6 +322,30 @@ class AdvisorMixin:
             ),
         )
         add_button.grid(row=1, column=2)
+        history_frame = ctk.CTkFrame(
+            card,
+            fg_color=self.COLORS["panel_soft"],
+            corner_radius=9,
+            border_width=1,
+            border_color=self.COLORS["border"],
+        )
+        history_frame.grid(
+            row=3,
+            column=0,
+            columnspan=3,
+            sticky="ew",
+            padx=12,
+            pady=(0, 12),
+        )
+        history_frame.grid_columnconfigure(0, weight=1)
+        history_canvas = tkinter.Canvas(
+            history_frame,
+            height=155,
+            background=self.COLORS["panel_soft"],
+            highlightthickness=0,
+        )
+        history_canvas.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
+        history_frame.grid_remove()
         odds_entry.bind(
             "<Return>",
             lambda _event: self.evaluate_winner_candidate(
@@ -310,22 +362,32 @@ class AdvisorMixin:
                 source_label,
             ),
         )
-        self.advisor_controls.append(
-            {
-                "candidate": candidate.copy(),
-                "entry": odds_entry,
-                "verdict": verdict,
-                "button": add_button,
-                "source_label": source_label,
-                "trend_label": trend_label,
-                "history_label": history_label,
-                "card": card,
-                "rank_label": rank_label,
-                "matched": None,
-                "winner_value": None,
-                "price_source": None,
-            }
+        control = {
+            "candidate": candidate.copy(),
+            "entry": odds_entry,
+            "verdict": verdict,
+            "button": add_button,
+            "source_label": source_label,
+            "trend_label": trend_label,
+            "history_label": history_label,
+            "freshness_label": freshness_label,
+            "history_button": history_button,
+            "history_frame": history_frame,
+            "history_canvas": history_canvas,
+            "card": card,
+            "rank_label": rank_label,
+            "matched": None,
+            "winner_value": None,
+            "price_source": None,
+            "is_stale": False,
+            "winner_fetched_at": None,
+            "winner_match_id": None,
+            "winner_outcome": None,
+        }
+        history_button.configure(
+            command=lambda selected=control: self.toggle_winner_history(selected)
         )
+        self.advisor_controls.append(control)
 
     def start_winner_auto_sync(self):
         if self.sport_dropdown.get() != "Soccer":
@@ -359,6 +421,7 @@ class AdvisorMixin:
                     candidate.get("home_team"),
                     candidate.get("away_team"),
                     result.matches,
+                    expected_start_time=candidate.get("commence_time"),
                 )
                 winner_odd = (
                     match.odd_for(str(candidate.get("odds_column")))
@@ -381,11 +444,25 @@ class AdvisorMixin:
         if result.error:
             self.write_to_terminal(f"[!] Winner sync failed: {result.error}")
         populated = 0
+        age_seconds = self.winner_data_age_seconds(result.fetched_at)
+        is_stale = (
+            age_seconds is None
+            or age_seconds > self.WINNER_STALE_AFTER_SECONDS
+        )
         for control in self.advisor_controls:
             if control.get("price_source") == "manual":
                 continue
             control["matched"] = False
             control["winner_value"] = None
+            control["is_stale"] = False
+            control["winner_fetched_at"] = None
+            control["winner_match_id"] = None
+            control["winner_outcome"] = None
+            control["history_button"].configure(state="disabled")
+            control["freshness_label"].configure(
+                text="Freshness: no matched price",
+                text_color=self.COLORS["muted"],
+            )
             control["source_label"].configure(
                 text="No confident Winner match",
                 text_color=self.COLORS["muted"],
@@ -399,7 +476,15 @@ class AdvisorMixin:
                     continue
                 control["matched"] = True
                 control["price_source"] = "auto"
+                control["is_stale"] = is_stale
+                control["winner_fetched_at"] = result.fetched_at
+                control["winner_match_id"] = winner_match.match_id
                 odds_column = str(control["candidate"].get("odds_column"))
+                control["winner_outcome"] = {
+                    "home_odds": "home",
+                    "draw_odds": "draw",
+                    "away_odds": "away",
+                }.get(odds_column)
                 previous = winner_match.previous_for(odds_column)
                 opening = winner_match.opening_for(odds_column)
                 trend = winner_match.trend_for(odds_column)
@@ -424,6 +509,15 @@ class AdvisorMixin:
                     ),
                     text_color=self.COLORS["success"],
                 )
+                freshness_text, freshness_color = self.winner_freshness_display(
+                    age_seconds, is_stale
+                )
+                control["freshness_label"].configure(
+                    text=freshness_text,
+                    text_color=freshness_color,
+                )
+                if control["winner_match_id"] and control["winner_outcome"]:
+                    control["history_button"].configure(state="normal")
                 entry.delete(0, "end")
                 entry.insert(0, f"{float(winner_odd):.2f}")
                 self.evaluate_winner_candidate(
@@ -434,6 +528,8 @@ class AdvisorMixin:
                     source="auto",
                 )
                 populated += 1
+                if control["history_frame"].winfo_ismapped():
+                    self.draw_winner_history(control)
             except (tkinter.TclError, ValueError, TypeError):
                 continue
 
@@ -474,9 +570,25 @@ class AdvisorMixin:
                         "matched this scan confidently. Manual entry remains available."
                     )
                 )
+            if populated and is_stale:
+                status = " â€¢ Winner prices stale - rescan required"
+                color = self.COLORS["danger"]
+                self.advisor_status.configure(
+                    text=(
+                        "Matched Winner prices are older than 5 minutes. "
+                        "They are visible for comparison, but Add to slip is disabled "
+                        "until a fresh sync completes."
+                    )
+                )
         if hasattr(self, "winner_sync_label"):
             self.winner_sync_label.configure(text=status, text_color=color)
         self.apply_advisor_filters()
+        self.after(
+            30_000,
+            lambda current_generation=generation: (
+                self.refresh_winner_freshness(current_generation)
+            ),
+        )
 
     def winner_trend_display(self, current, previous, trend):
         try:
@@ -501,6 +613,219 @@ class AdvisorMixin:
         except (TypeError, ValueError):
             return "—"
 
+    @staticmethod
+    def winner_data_age_seconds(fetched_at):
+        if not fetched_at:
+            return None
+        try:
+            fetched = datetime.fromisoformat(
+                str(fetched_at).replace("Z", "+00:00")
+            )
+            if fetched.tzinfo is None:
+                fetched = fetched.replace(tzinfo=timezone.utc)
+            return max(
+                0.0,
+                (
+                    datetime.now(timezone.utc)
+                    - fetched.astimezone(timezone.utc)
+                ).total_seconds(),
+            )
+        except (TypeError, ValueError):
+            return None
+
+    def winner_freshness_display(self, age_seconds, is_stale):
+        if age_seconds is None:
+            return (
+                "Freshness unknown - rescan before betting",
+                self.COLORS["danger"],
+            )
+        if age_seconds < 60:
+            age_text = f"{int(age_seconds)} sec ago"
+        else:
+            age_text = f"{int(age_seconds // 60)} min ago"
+        if is_stale:
+            return (
+                f"Stale - synced {age_text} - rescan required",
+                self.COLORS["danger"],
+            )
+        return f"Live sync - {age_text}", self.COLORS["success"]
+
+    def refresh_winner_freshness(self, generation):
+        if generation != self.winner_sync_generation:
+            return
+        stale_count = 0
+        for control in self.advisor_controls:
+            if (
+                control.get("price_source") != "auto"
+                or not control.get("matched")
+            ):
+                continue
+            age_seconds = self.winner_data_age_seconds(
+                control.get("winner_fetched_at")
+            )
+            is_stale = (
+                age_seconds is None
+                or age_seconds > self.WINNER_STALE_AFTER_SECONDS
+            )
+            control["is_stale"] = is_stale
+            text, color = self.winner_freshness_display(age_seconds, is_stale)
+            try:
+                control["freshness_label"].configure(
+                    text=text,
+                    text_color=color,
+                )
+                if is_stale:
+                    stale_count += 1
+                    control["button"].configure(
+                        text="Stale - rescan",
+                        state="disabled",
+                    )
+                elif control.get("winner_value") is not None:
+                    control["button"].configure(
+                        text="Add to slip",
+                        state="normal",
+                    )
+            except tkinter.TclError:
+                continue
+        if stale_count and hasattr(self, "winner_sync_label"):
+            self.winner_sync_label.configure(
+                text=f" â€¢ {stale_count} Winner prices stale - scan again",
+                text_color=self.COLORS["danger"],
+            )
+        self.after(
+            30_000,
+            lambda current_generation=generation: (
+                self.refresh_winner_freshness(current_generation)
+            ),
+        )
+
+    def toggle_winner_history(self, control):
+        frame = control["history_frame"]
+        if frame.winfo_ismapped():
+            frame.grid_remove()
+            control["history_button"].configure(text="Price chart")
+            return
+        frame.grid()
+        control["history_button"].configure(text="Hide chart")
+        self.after_idle(lambda: self.draw_winner_history(control))
+
+    def draw_winner_history(self, control):
+        canvas = control["history_canvas"]
+        canvas.delete("all")
+        width = max(canvas.winfo_width(), 520)
+        height = max(canvas.winfo_height(), 155)
+        points = WinnerHistoryStore().get_history(
+            control.get("winner_match_id"),
+            control.get("winner_outcome"),
+        )
+        muted = self.COLORS["muted"]
+        if not points:
+            canvas.create_text(
+                width / 2,
+                height / 2,
+                text=(
+                    "No stored price changes yet. "
+                    "Future scans will build this chart."
+                ),
+                fill=muted,
+                font=("Segoe UI", 10),
+            )
+            return
+
+        left, right, top, bottom = 54, width - 18, 18, height - 32
+        values = [float(point["current_odds"]) for point in points]
+        low, high = min(values), max(values)
+        padding = max((high - low) * 0.15, 0.05)
+        low -= padding
+        high += padding
+        canvas.create_line(
+            left, top, left, bottom, fill=self.COLORS["border_light"]
+        )
+        canvas.create_line(
+            left, bottom, right, bottom, fill=self.COLORS["border_light"]
+        )
+        canvas.create_text(
+            left - 8,
+            top,
+            text=f"{high:.2f}",
+            anchor="e",
+            fill=muted,
+            font=("Segoe UI", 8),
+        )
+        canvas.create_text(
+            left - 8,
+            bottom,
+            text=f"{low:.2f}",
+            anchor="e",
+            fill=muted,
+            font=("Segoe UI", 8),
+        )
+
+        coordinates = []
+        count = len(points)
+        for index, value in enumerate(values):
+            x = (
+                left
+                if count == 1
+                else left + (right - left) * index / (count - 1)
+            )
+            y = bottom - ((value - low) / (high - low)) * (bottom - top)
+            coordinates.extend((x, y))
+        if len(coordinates) >= 4:
+            canvas.create_line(
+                *coordinates,
+                fill=self.COLORS["accent"],
+                width=2,
+            )
+        for index in range(0, len(coordinates), 2):
+            x, y = coordinates[index], coordinates[index + 1]
+            canvas.create_oval(
+                x - 3,
+                y - 3,
+                x + 3,
+                y + 3,
+                fill=self.COLORS["accent"],
+                outline=self.COLORS["accent"],
+            )
+        canvas.create_text(
+            left,
+            bottom + 15,
+            text=self.winner_history_time_text(points[0]["recorded_at"]),
+            anchor="w",
+            fill=muted,
+            font=("Segoe UI", 8),
+        )
+        canvas.create_text(
+            right,
+            bottom + 15,
+            text=self.winner_history_time_text(points[-1]["recorded_at"]),
+            anchor="e",
+            fill=muted,
+            font=("Segoe UI", 8),
+        )
+        change_word = "change" if len(points) == 1 else "changes"
+        canvas.create_text(
+            right,
+            top,
+            text=(
+                f"{len(points)} stored {change_word} - "
+                f"current {values[-1]:.2f}"
+            ),
+            anchor="e",
+            fill=self.COLORS["text"],
+            font=("Segoe UI", 9, "bold"),
+        )
+
+    @staticmethod
+    def winner_history_time_text(value):
+        try:
+            timestamp = pd.to_datetime(value, utc=True).tz_convert(
+                "Asia/Jerusalem"
+            )
+            return timestamp.strftime("%d %b %H:%M")
+        except (TypeError, ValueError):
+            return "Unknown"
+
     def mark_winner_entry_edited(
         self, candidate, odds_entry, verdict, button, source_label
     ):
@@ -517,6 +842,8 @@ class AdvisorMixin:
                 control["matched"] = True
                 control["winner_value"] = None
                 control["price_source"] = "manual"
+                control["is_stale"] = False
+                control["winner_fetched_at"] = None
                 control["trend_label"].configure(
                     text="",
                     text_color=self.COLORS["muted"],
@@ -524,9 +851,14 @@ class AdvisorMixin:
                 control["history_label"].configure(
                     text="Open: —  •  Prev: —"
                 )
+                control["freshness_label"].configure(
+                    text="Manual price - verify it in Winner",
+                    text_color=self.COLORS["warning"],
+                )
                 break
         button.configure(
             text="Evaluate",
+            state="normal",
             command=lambda: self.evaluate_winner_candidate(
                 candidate,
                 odds_entry,
@@ -563,8 +895,10 @@ class AdvisorMixin:
             label = f"Poor price • {value:+.2f}% value"
             color = self.COLORS["danger"]
         verdict.configure(text=label, text_color=color)
+        matched_control = None
         for control in self.advisor_controls:
             if control["entry"] is odds_entry:
+                matched_control = control
                 control["winner_value"] = float(value)
                 control["price_source"] = source
                 if source == "manual":
@@ -574,12 +908,23 @@ class AdvisorMixin:
                         text_color=self.COLORS["warning"],
                     )
                 break
-        button.configure(
-            text="Add to slip",
-            command=lambda: self.add_winner_candidate_to_slip(
-                candidate, winner_odds, value, source
-            ),
-        )
+        if (
+            source == "auto"
+            and matched_control is not None
+            and matched_control.get("is_stale")
+        ):
+            button.configure(
+                text="Stale - rescan",
+                state="disabled",
+            )
+        else:
+            button.configure(
+                text="Add to slip",
+                state="normal",
+                command=lambda: self.add_winner_candidate_to_slip(
+                    candidate, winner_odds, value, source
+                ),
+            )
         self.apply_advisor_filters()
 
     def apply_advisor_filters(self):

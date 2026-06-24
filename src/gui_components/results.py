@@ -172,6 +172,13 @@ class ResultsMixin:
             self.render_best_opportunities(self.latest_results_df)
 
     def display_game_results(self, df):
+        df = MarketAnalyzer.upcoming_only(df)
+        if df is None or df.empty:
+            self.show_results_message(
+                "All returned fixtures have already started. "
+                "Scan again when upcoming games are listed."
+            )
+            return
         self.capture_odds_movements(df)
         self.latest_results_df = df.copy()
         if self.result_search_after_id is not None:

@@ -861,9 +861,27 @@ class GamblerBotGUI(
                     "Games were returned, but their odds could not be displayed.",
                 )
                 return
-            master_df = MarketAnalyzer.enrich_market_dataframe(
-                pd.concat(frames, ignore_index=True)
-            )
+            parsed_df = pd.concat(frames, ignore_index=True)
+            parsed_games = parsed_df["event_id"].nunique(dropna=False)
+            upcoming_df = MarketAnalyzer.upcoming_only(parsed_df)
+            upcoming_games = upcoming_df["event_id"].nunique(dropna=False)
+            removed_games = max(0, parsed_games - upcoming_games)
+            if removed_games:
+                self.write_to_terminal(
+                    f"[-] Hidden {removed_games} fixture(s) that already started "
+                    "or had no valid kickoff time."
+                )
+            if upcoming_df.empty:
+                self.write_to_terminal(
+                    "[-] No not-yet-started fixtures remain after kickoff filtering."
+                )
+                self.post_to_ui(
+                    self.show_results_message,
+                    "All returned fixtures have already started. "
+                    "Scan again when upcoming games are listed.",
+                )
+                return
+            master_df = MarketAnalyzer.enrich_market_dataframe(upcoming_df)
             self.write_to_terminal(
                 f"[+] Operational data matrix compiled ({len(master_df)} rows parsed)."
             )

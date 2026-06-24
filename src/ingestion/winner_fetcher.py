@@ -154,6 +154,7 @@ class WinnerFetchResult:
     error: str | None = None
     warning: str | None = None
     from_cache: bool = False
+    fetched_at: str | None = None
 
 
 class WinnerHistoryStore:
@@ -234,6 +235,34 @@ class WinnerHistoryStore:
                     )
             connection.commit()
 
+    def get_history(self, match_id, outcome, limit=120):
+        """Return the oldest-to-newest stored price changes for one outcome."""
+        if not match_id or not self.path.exists():
+            return []
+        try:
+            with closing(sqlite3.connect(self.path)) as connection:
+                rows = connection.execute(
+                    """
+                    SELECT recorded_at, current_odds, previous_odds, opening_odds
+                    FROM winner_odds_history
+                    WHERE match_id = ? AND outcome = ?
+                    ORDER BY id DESC
+                    LIMIT ?
+                    """,
+                    (str(match_id), str(outcome), max(1, int(limit))),
+                ).fetchall()
+        except sqlite3.Error:
+            return []
+        return [
+            {
+                "recorded_at": row[0],
+                "current_odds": float(row[1]),
+                "previous_odds": row[2],
+                "opening_odds": row[3],
+            }
+            for row in reversed(rows)
+        ]
+
 
 class WinnerOddsFetcher:
     """Retrieve public Winner listings without bypassing access controls."""
@@ -261,6 +290,7 @@ class WinnerOddsFetcher:
                     cached.error,
                     cached.warning,
                     True,
+                    cached.fetched_at,
                 )
 
             if self.uses_public_line_api:
@@ -290,6 +320,15 @@ class WinnerOddsFetcher:
             else:
                 result = self._fetch_configured_source()
 
+            if result.fetched_at is None:
+                result = WinnerFetchResult(
+                    result.matches,
+                    result.source_url,
+                    result.error,
+                    result.warning,
+                    result.from_cache,
+                    datetime.now(timezone.utc).isoformat(),
+                )
             if result.matches:
                 try:
                     self.history_store.record_matches(result.matches)
@@ -302,6 +341,8 @@ class WinnerOddsFetcher:
                             f"{result.warning + ' ' if result.warning else ''}"
                             f"Winner history logging failed: {exc}"
                         ),
+                        result.from_cache,
+                        result.fetched_at,
                     )
             self.__class__._last_fetch_at = time.monotonic()
             self.__class__._cached_result = result
@@ -811,9 +852,31 @@ def team_similarity(expected, actual):
     return max(scores, default=0.0)
 
 
-def match_winner_game(home_team, away_team, winner_matches, threshold=0.72):
+def parse_match_time(value):
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def match_winner_game(
+    home_team,
+    away_team,
+    winner_matches,
+    threshold=0.72,
+    expected_start_time=None,
+    max_kickoff_difference_hours=18,
+):
+    """Match both team identity and, when available, the scheduled kickoff."""
+    expected_kickoff = parse_match_time(expected_start_time)
     best = None
     best_score = 0.0
+    best_time_difference = float("inf")
     for match in winner_matches:
         direct = (
             team_similarity(home_team, match.home_team)
@@ -824,7 +887,24 @@ def match_winner_game(home_team, away_team, winner_matches, threshold=0.72):
             + team_similarity(away_team, match.home_team)
         ) / 2
         score = max(direct, swapped)
-        if score > best_score:
+
+        match_kickoff = parse_match_time(match.start_time)
+        time_difference = float("inf")
+        if expected_kickoff is not None and match_kickoff is not None:
+            time_difference = abs(
+                (match_kickoff - expected_kickoff).total_seconds()
+            ) / 3600
+            if time_difference > max_kickoff_difference_hours:
+                continue
+
+        if (
+            score > best_score
+            or (
+                abs(score - best_score) < 0.0001
+                and time_difference < best_time_difference
+            )
+        ):
             best = match
             best_score = score
+            best_time_difference = time_difference
     return (best, best_score) if best is not None and best_score >= threshold else (None, best_score)

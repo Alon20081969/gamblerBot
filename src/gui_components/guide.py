@@ -380,6 +380,50 @@ class GuideMixin:
                 "or away price creates one timestamped history point."
             ),
         },
+        {
+            "title": "Winner price chart",
+            "summary": (
+                "An expandable graph inside an Advisor card showing each changed "
+                "Winner price stored for that exact match and outcome."
+            ),
+            "example": (
+                "Open Price chart to see whether the selected Winner odd has risen "
+                "or fallen across your scans. One dot means only one change is stored."
+            ),
+        },
+        {
+            "title": "Fixture identity matching",
+            "summary": (
+                "The Winner sync checks both teams and kickoff time so repeated "
+                "fixtures are less likely to receive odds from the wrong game."
+            ),
+            "example": (
+                "If the same teams play again next week, a listing more than 18 hours "
+                "from the scanned kickoff is rejected even when the names match."
+            ),
+        },
+        {
+            "title": "Stale Winner odds",
+            "summary": (
+                "An automatically synced Winner price older than five minutes. "
+                "It may no longer be available at the bookmaker."
+            ),
+            "example": (
+                "The Advisor keeps a stale price visible for context but disables "
+                "Add to slip until a new scan refreshes it."
+            ),
+        },
+        {
+            "title": "Upcoming-only fixture filter",
+            "summary": (
+                "A kickoff-time check that removes games once their scheduled start "
+                "time has passed, even if the odds provider still returns the market."
+            ),
+            "example": (
+                "If Qatar vs Bosnia kicked off at 20:00, a scan after 20:00 will hide "
+                "it from Results, Best, Advisor, and new history records."
+            ),
+        },
     )
 
     def build_guide_tab(self):

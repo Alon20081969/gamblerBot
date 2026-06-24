@@ -9,6 +9,25 @@ class MarketAnalyzer:
     ODDS_COLUMNS = ("home_odds", "draw_odds", "away_odds")
 
     @staticmethod
+    def upcoming_only(df, now=None):
+        """Keep only fixtures whose valid kickoff timestamp is still in the future."""
+        if df is None or df.empty or "commence_time" not in df:
+            return df
+        current_time = (
+            pd.Timestamp.now(tz="UTC")
+            if now is None
+            else pd.to_datetime(now, errors="coerce", utc=True)
+        )
+        if pd.isna(current_time):
+            current_time = pd.Timestamp.now(tz="UTC")
+        kickoff = pd.to_datetime(
+            df["commence_time"],
+            errors="coerce",
+            utc=True,
+        )
+        return df.loc[kickoff.notna() & (kickoff > current_time)].copy()
+
+    @staticmethod
     def safe_decimal(value):
         """Return a valid decimal odd as float, otherwise None."""
         try:
