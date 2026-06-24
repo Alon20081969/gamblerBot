@@ -216,6 +216,15 @@ class ResultsMixin:
             "selection": str(row.get("selection", row.get("outcome", "Selection"))),
             "bookmaker": bookmaker,
             "odds": odds,
+            "fair_odds": self.optional_float(row.get("consensus_fair_odds")),
+            "consensus_value": self.optional_float(row.get("value_score")),
+            "confidence": str(row.get("consensus_confidence") or "Low"),
+            "consensus_bookmakers": self.optional_int(
+                row.get("consensus_bookmakers")
+            ),
+            "outliers_excluded": self.optional_int(
+                row.get("outliers_excluded")
+            ) or 0,
         }
         self.set_custom_odd_status(event_key, False)
         self.update_odds_button_styles(event_key)
@@ -282,6 +291,11 @@ class ResultsMixin:
             f"{self.format_metric(row.get('consensus_probability_pct'), '%')}   |   "
             f"{int(row.get('consensus_bookmakers') or 0)} bookmakers"
         )
+        if int(row.get("outliers_excluded") or 0):
+            detail += (
+                f"   |   {int(row.get('outliers_excluded'))} suspicious price "
+                f"excluded"
+            )
         detail_label = ctk.CTkLabel(
             card,
             text=detail,
@@ -346,6 +360,53 @@ class ResultsMixin:
             f"bookmakers whose estimates span "
             f"{self.format_metric(probability_range, ' percentage points')}."
         )
+
+    def bet_analytics_from_row(self, row, odds_column, offered_odds):
+        prefix = odds_column.replace("_odds", "")
+        probability_pct = row.get(f"{prefix}_consensus_probability_pct")
+        try:
+            consensus_value = (
+                (float(offered_odds) * (float(probability_pct) / 100)) - 1
+            ) * 100
+        except (TypeError, ValueError):
+            consensus_value = None
+        return {
+            "fair_odds": self.optional_float(
+                row.get(f"{prefix}_consensus_fair_odds")
+            ),
+            "consensus_value": (
+                round(consensus_value, 2)
+                if consensus_value is not None
+                else None
+            ),
+            "confidence": str(
+                row.get(f"{prefix}_consensus_confidence") or "Low"
+            ),
+            "consensus_bookmakers": self.optional_int(
+                row.get(f"{prefix}_consensus_bookmakers")
+            ),
+            "outliers_excluded": self.optional_int(
+                row.get(f"{prefix}_outliers_excluded")
+            ) or 0,
+        }
+
+    @staticmethod
+    def optional_float(value):
+        if pd.isna(value):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def optional_int(value):
+        if pd.isna(value):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     def capture_odds_movements(self, df):
         """Compare this scan with prior prices from the same session."""
@@ -498,8 +559,30 @@ class ResultsMixin:
             valid = game_df.dropna(subset=[column])
             if valid.empty:
                 continue
-            highest = valid.loc[valid[column].idxmax()]
+            metric_prefix = column.replace("_odds", "")
+            trusted_best_odds = valid.iloc[0].get(
+                f"{metric_prefix}_best_odds"
+            )
+            trusted_best_bookmaker = valid.iloc[0].get(
+                f"{metric_prefix}_best_bookmaker"
+            )
+            trusted = (
+                valid[
+                    (valid["bookmaker"].astype(str) == str(trusted_best_bookmaker))
+                    & (valid[column].astype(float) == float(trusted_best_odds))
+                ]
+                if pd.notna(trusted_best_odds)
+                else valid.iloc[0:0]
+            )
+            highest = (
+                trusted.iloc[0]
+                if not trusted.empty
+                else valid.loc[valid[column].idxmax()]
+            )
             lowest = valid.loc[valid[column].idxmin()]
+            excluded_count = self.optional_int(
+                valid.iloc[0].get(f"{metric_prefix}_outliers_excluded")
+            ) or 0
             ctk.CTkLabel(
                 summary,
                 text=label,
@@ -507,15 +590,26 @@ class ResultsMixin:
                 text_color=self.COLORS["text"],
                 font=ctk.CTkFont(size=12, weight="bold"),
             ).grid(row=display_row, column=0, sticky="w", padx=(0, 12), pady=2)
-            for col, prefix, odds_row in (
-                (1, "Highest", highest), (2, "Lowest", lowest)
+            for col, price_label, odds_row in (
+                (
+                    1,
+                    "Best trusted" if excluded_count else "Highest",
+                    highest,
+                ),
+                (2, "Lowest", lowest),
             ):
                 button = self.create_selectable_odd(
                     summary,
-                    text=f"{prefix}: {odds_row[column]:.2f}  ({odds_row['bookmaker']})",
+                    text=(
+                        f"{price_label}: {odds_row[column]:.2f}  "
+                        f"({odds_row['bookmaker']})"
+                    ),
                     event_key=event_key, match=f"{home} vs {away}", selection=pick,
                     bookmaker=str(odds_row['bookmaker']), odds=float(odds_row[column]),
                     odds_column=column,
+                    analytics=self.bet_analytics_from_row(
+                        odds_row, column, odds_row[column]
+                    ),
                 )
                 button.grid(row=display_row, column=col, sticky="ew", padx=6, pady=2)
             stats_text = self.outcome_probability_summary(
@@ -626,5 +720,8 @@ class ResultsMixin:
                     match=f"{home} vs {away}", selection=selection,
                     bookmaker=str(odds_row['bookmaker']), odds=float(odds),
                     odds_column=odds_column,
+                    analytics=self.bet_analytics_from_row(
+                        odds_row, odds_column, odds
+                    ),
                 )
                 button.grid(row=table_row, column=column_index, sticky="ew", padx=7, pady=3)

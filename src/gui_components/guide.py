@@ -161,6 +161,41 @@ class GuideMixin:
                 "4 bookmakers whose estimates span 6 percentage points.'"
             ),
         },
+        {
+            "title": "Value-aware bet slip",
+            "summary": (
+                "A bet-slip selection that keeps its fair odds, consensus value, "
+                "confidence rating, and bookmaker count beside the offered price."
+            ),
+            "example": (
+                "Example: the slip can show offered odds 5.00, fair odds 4.00, "
+                "+25% consensus value, and Medium confidence. This preserves the "
+                "reason the selection was added."
+            ),
+        },
+        {
+            "title": "Outlier protection",
+            "summary": (
+                "A safety rule that stops one unusually high bookmaker price from "
+                "creating a misleading value recommendation."
+            ),
+            "example": (
+                "Example: if most prices are near 4.00 but one feed reports 15.00, "
+                "the 15.00 remains visible in bookmaker details but is excluded from "
+                "the recommended best price when it exceeds the robust limit."
+            ),
+        },
+        {
+            "title": "Suspicious price",
+            "summary": (
+                "A price at least 15% above the median and also beyond a robust "
+                "median-deviation limit when three or more prices are available."
+            ),
+            "example": (
+                "This may be a genuine temporary price or a feed error. The app does "
+                "not delete it; it simply avoids using it to calculate recommended value."
+            ),
+        },
     )
 
     def build_guide_tab(self):

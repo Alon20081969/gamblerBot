@@ -154,6 +154,11 @@ class BettingMixin:
                         "selection": str(bet["selection"]),
                         "bookmaker": str(bet["bookmaker"]),
                         "odds": odds,
+                        "fair_odds": bet.get("fair_odds"),
+                        "consensus_value": bet.get("consensus_value"),
+                        "confidence": bet.get("confidence"),
+                        "consensus_bookmakers": bet.get("consensus_bookmakers"),
+                        "outliers_excluded": bet.get("outliers_excluded", 0),
                     })
                 except (KeyError, TypeError, ValueError):
                     continue
@@ -380,7 +385,7 @@ class BettingMixin:
         self.calculator_profit_label.configure(text=f"Estimated profit: {stake * (combined - 1):,.2f}")
 
     def create_selectable_odd(self, parent, text, event_key, match, selection,
-                              bookmaker, odds, odds_column):
+                              bookmaker, odds, odds_column, analytics=None):
         identity = (event_key, bookmaker, odds_column)
         movement = self.odds_movements.get(identity)
         if movement is not None and movement > 0:
@@ -401,14 +406,16 @@ class BettingMixin:
             border_color=self.COLORS["border_light"],
             text_color=self.COLORS["text"],
             command=lambda: self.toggle_bet(
-                identity, event_key, match, selection, bookmaker, odds
+                identity, event_key, match, selection, bookmaker, odds,
+                analytics,
             ),
         )
         self.odds_buttons.setdefault(identity, []).append((button, display_text, movement))
         self.update_odds_button_style(identity)
         return button
 
-    def toggle_bet(self, identity, event_key, match, selection, bookmaker, odds):
+    def toggle_bet(self, identity, event_key, match, selection, bookmaker, odds,
+                   analytics=None):
         current = self.selected_bets.get(event_key)
         if current and current["identity"] == identity:
             del self.selected_bets[event_key]
@@ -416,6 +423,7 @@ class BettingMixin:
             self.selected_bets[event_key] = {
                 "identity": identity, "match": match, "selection": selection,
                 "bookmaker": bookmaker, "odds": odds,
+                **(analytics or {}),
             }
         self.set_custom_odd_status(event_key, False)
         self.update_odds_button_styles(event_key)
@@ -474,14 +482,45 @@ class BettingMixin:
                 card, text=(f"{bet['match']}\nPick: {bet['selection']}  •  "
                             f"{bet['bookmaker']}  @  {bet['odds']:.2f}"),
                 anchor="w", justify="left",
-            ).grid(row=0, column=0, sticky="ew", padx=12, pady=9)
+            ).grid(row=0, column=0, sticky="ew", padx=12, pady=(9, 3))
+            analytics_text = self.format_slip_analytics(bet)
+            if analytics_text:
+                ctk.CTkLabel(
+                    card,
+                    text=analytics_text,
+                    anchor="w",
+                    justify="left",
+                    text_color=self.COLORS["muted"],
+                    font=ctk.CTkFont(size=10),
+                ).grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 9))
             ctk.CTkButton(
                 card, text="×", width=30, height=28, fg_color="transparent",
                 hover_color=("#d98b8b", "#8f3333"),
                 text_color=("#a13a3a", "#ef8585"),
                 command=lambda key=event_key: self.remove_bet(key),
-            ).grid(row=0, column=1, padx=(3, 8), pady=8)
+            ).grid(row=0, column=1, rowspan=2, padx=(3, 8), pady=8)
         self.update_bet_totals()
+
+    def format_slip_analytics(self, bet):
+        fair_odds = bet.get("fair_odds")
+        value = bet.get("consensus_value")
+        confidence = bet.get("confidence")
+        bookmakers = bet.get("consensus_bookmakers")
+        if fair_odds is None or value is None:
+            return "Market analysis unavailable for this custom or saved selection."
+        try:
+            text = (
+                f"Fair odds: {float(fair_odds):.2f}   |   "
+                f"Consensus value: {float(value):+.2f}%   |   "
+                f"Confidence: {confidence or 'Low'}   |   "
+                f"{int(bookmakers or 0)} bookmakers"
+            )
+            excluded = int(bet.get("outliers_excluded") or 0)
+            if excluded:
+                text += f"   |   {excluded} suspicious price excluded"
+            return text
+        except (TypeError, ValueError):
+            return "Market analysis unavailable for this selection."
 
     def remove_bet(self, event_key):
         if event_key in self.selected_bets:

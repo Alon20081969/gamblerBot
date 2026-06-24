@@ -158,6 +158,32 @@ class MarketAnalyzer:
             return "Medium"
         return "Low"
 
+    @classmethod
+    def protected_best_market(cls, valid, odds_column):
+        """
+        Return prices eligible for the advertised best odd.
+
+        With at least three prices, an upper price is treated as an outlier when
+        it is above the median by both a robust MAD threshold and a minimum 15%
+        tolerance. Outliers remain visible in bookmaker details, but do not
+        create an unrealistic value recommendation.
+        """
+        if valid is None or valid.empty or len(valid) < 3:
+            return valid, pd.DataFrame(columns=valid.columns if valid is not None else [])
+
+        prices = valid[odds_column].astype(float)
+        median = float(prices.median())
+        median_absolute_deviation = float((prices - median).abs().median())
+        robust_distance = 3 * 1.4826 * median_absolute_deviation
+        tolerance = max(robust_distance, median * 0.15)
+        upper_limit = median + tolerance
+        outlier_mask = prices > upper_limit
+
+        protected = valid.loc[~outlier_mask]
+        if protected.empty:
+            return valid, valid.iloc[0:0]
+        return protected, valid.loc[outlier_mask]
+
     @staticmethod
     def value_edge_pct(best_odds, consensus_probability):
         """
@@ -287,10 +313,15 @@ class MarketAnalyzer:
                 if valid.empty:
                     continue
 
-                highest = valid.loc[valid[odds_column].idxmax()]
+                protected, excluded = cls.protected_best_market(
+                    valid, odds_column
+                )
+                raw_highest = valid.loc[valid[odds_column].idxmax()]
+                highest = protected.loc[protected[odds_column].idxmax()]
                 lowest = valid.loc[valid[odds_column].idxmin()]
-                median = float(valid[odds_column].median())
+                median = float(protected[odds_column].median())
                 best_odds = float(highest[odds_column])
+                raw_best_odds = float(raw_highest[odds_column])
                 worst_odds = float(lowest[odds_column])
                 consensus_probability = consensus.get(odds_column)
                 fair_odds = (
@@ -321,6 +352,9 @@ class MarketAnalyzer:
                     "odds_column": odds_column,
                     "best_odds": best_odds,
                     "best_bookmaker": str(highest["bookmaker"]),
+                    "raw_best_odds": raw_best_odds,
+                    "raw_best_bookmaker": str(raw_highest["bookmaker"]),
+                    "outliers_excluded": int(len(excluded)),
                     "worst_odds": worst_odds,
                     "worst_bookmaker": str(lowest["bookmaker"]),
                     "median_odds": round(median, 2),
@@ -372,6 +406,13 @@ class MarketAnalyzer:
             prefix = odds_column.replace("_odds", "")
             enriched.loc[mask, f"{prefix}_best_odds"] = row["best_odds"]
             enriched.loc[mask, f"{prefix}_best_bookmaker"] = row["best_bookmaker"]
+            enriched.loc[mask, f"{prefix}_raw_best_odds"] = row["raw_best_odds"]
+            enriched.loc[mask, f"{prefix}_raw_best_bookmaker"] = (
+                row["raw_best_bookmaker"]
+            )
+            enriched.loc[mask, f"{prefix}_outliers_excluded"] = (
+                row["outliers_excluded"]
+            )
             enriched.loc[mask, f"{prefix}_worst_odds"] = row["worst_odds"]
             enriched.loc[mask, f"{prefix}_worst_bookmaker"] = row["worst_bookmaker"]
             enriched.loc[mask, f"{prefix}_spread_pct"] = row["spread_pct"]

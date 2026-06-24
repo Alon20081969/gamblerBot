@@ -306,6 +306,11 @@ class HistoryExportMixin:
                 "event_id": event_key, "match": bet['match'],
                 "selection": bet['selection'], "bookmaker": bet['bookmaker'],
                 "odds": bet['odds'], "stake": self.stake_entry.get().strip(),
+                "fair_odds": bet.get("fair_odds"),
+                "consensus_value": bet.get("consensus_value"),
+                "confidence": bet.get("confidence"),
+                "consensus_bookmakers": bet.get("consensus_bookmakers"),
+                "outliers_excluded": bet.get("outliers_excluded", 0),
             }
             for event_key, bet in self.selected_bets.items()
         ]
