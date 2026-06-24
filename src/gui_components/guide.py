@@ -196,6 +196,39 @@ class GuideMixin:
                 "not delete it; it simply avoids using it to calculate recommended value."
             ),
         },
+        {
+            "title": "Odds freshness",
+            "summary": (
+                "The time of the latest successful market scan used to verify prices "
+                "in the Results page and Bet Slip."
+            ),
+            "example": (
+                "Example: 'Odds updated 20:14:32' means the displayed verification "
+                "uses market data received at that Jerusalem time."
+            ),
+        },
+        {
+            "title": "Changed odds",
+            "summary": (
+                "A warning that the currently available bookmaker price differs from "
+                "the price originally added to your slip."
+            ),
+            "example": (
+                "Example: 2.20 → 2.05 means your stored selection still shows 2.20, "
+                "but the latest scan found 2.05. The app does not silently replace it."
+            ),
+        },
+        {
+            "title": "Unavailable selection",
+            "summary": (
+                "The bookmaker and outcome combination from the slip was not returned "
+                "by the latest scan."
+            ),
+            "example": (
+                "It may have been removed, suspended, renamed, or temporarily omitted. "
+                "Treat the stored price as stale until a later scan verifies it."
+            ),
+        },
     )
 
     def build_guide_tab(self):

@@ -493,13 +493,61 @@ class BettingMixin:
                     text_color=self.COLORS["muted"],
                     font=ctk.CTkFont(size=10),
                 ).grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 9))
+            freshness_text, freshness_color = self.slip_market_status(bet)
+            ctk.CTkLabel(
+                card,
+                text=freshness_text,
+                anchor="w",
+                justify="left",
+                text_color=freshness_color,
+                font=ctk.CTkFont(size=10, weight="bold"),
+            ).grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 9))
             ctk.CTkButton(
                 card, text="×", width=30, height=28, fg_color="transparent",
                 hover_color=("#d98b8b", "#8f3333"),
                 text_color=("#a13a3a", "#ef8585"),
                 command=lambda key=event_key: self.remove_bet(key),
-            ).grid(row=0, column=1, rowspan=2, padx=(3, 8), pady=8)
+            ).grid(row=0, column=1, rowspan=3, padx=(3, 8), pady=8)
         self.update_bet_totals()
+
+    def slip_market_status(self, bet):
+        if bet.get("bookmaker") == "Custom odd":
+            return (
+                "Custom price • not checked against the live market",
+                self.COLORS["muted"],
+            )
+
+        identity = tuple(bet.get("identity", ()))
+        scanned_at = getattr(self, "latest_market_scan_at", None)
+        if not scanned_at:
+            return ("Not checked • scan the market to verify this price", self.COLORS["muted"])
+
+        current_snapshot = getattr(self, "latest_market_snapshot", {})
+        if identity not in current_snapshot:
+            return (
+                f"Unavailable in latest scan • checked {scanned_at.strftime('%H:%M:%S')}",
+                self.COLORS["danger"],
+            )
+
+        current_odds = float(current_snapshot[identity])
+        selected_odds = float(bet["odds"])
+        if identity in getattr(self, "suspicious_odds_identities", set()):
+            return (
+                f"Suspicious price • latest {current_odds:.2f} at "
+                f"{scanned_at.strftime('%H:%M:%S')}",
+                self.COLORS["danger"],
+            )
+        if abs(current_odds - selected_odds) >= 0.001:
+            direction = "rose" if current_odds > selected_odds else "fell"
+            return (
+                f"Odds changed • {selected_odds:.2f} → {current_odds:.2f} "
+                f"({direction}) at {scanned_at.strftime('%H:%M:%S')}",
+                self.COLORS["warning"],
+            )
+        return (
+            f"Current price ✓ • verified {scanned_at.strftime('%H:%M:%S')}",
+            self.COLORS["success"],
+        )
 
     def format_slip_analytics(self, bet):
         fair_odds = bet.get("fair_odds")

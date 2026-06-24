@@ -84,6 +84,9 @@ class GamblerBotGUI(
         self.custom_odd_controls = {}
         self.previous_odds_snapshot = {}
         self.odds_movements = {}
+        self.latest_market_snapshot = {}
+        self.suspicious_odds_identities = set()
+        self.latest_market_scan_at = None
         self.odds_history = {}
         self.history_series_labels = {}
         self.ui_queue = queue.Queue()
@@ -270,6 +273,16 @@ class GamblerBotGUI(
             font=ctk.CTkFont(size=13, weight="bold"),
         )
         self.scan_button.grid(row=1, column=2, sticky="w", padx=(0, 10), pady=(0, 8))
+
+        self.scan_freshness_label = ctk.CTkLabel(
+            self.top_frame,
+            text="Odds: not scanned",
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=10),
+        )
+        self.scan_freshness_label.grid(
+            row=1, column=3, sticky="w", padx=(0, 10), pady=(0, 8)
+        )
 
         self.slip_summary_button = ctk.CTkButton(
             self.top_frame,

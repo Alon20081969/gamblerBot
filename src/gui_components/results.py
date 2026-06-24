@@ -443,7 +443,47 @@ class ResultsMixin:
 
         self.odds_movements = movements
         self.previous_odds_snapshot.update(current)
+        self.latest_market_snapshot = current
+        self.suspicious_odds_identities = self.find_suspicious_identities(df)
+        self.latest_market_scan_at = datetime.now(ZoneInfo("Asia/Jerusalem"))
+        if hasattr(self, "scan_freshness_label"):
+            self.scan_freshness_label.configure(
+                text=f"Odds updated {self.latest_market_scan_at.strftime('%H:%M:%S')}",
+                text_color=self.COLORS["success"],
+            )
         self.record_odds_history(current, metadata)
+        if hasattr(self, "bet_slip_results"):
+            self.render_bet_slip()
+
+    def find_suspicious_identities(self, df):
+        suspicious = set()
+        for _, row in df.iterrows():
+            event_id = row.get("event_id")
+            event_key = (
+                str(event_id)
+                if pd.notna(event_id)
+                else f"{row.get('home_team')}|{row.get('away_team')}"
+            )
+            bookmaker = str(row.get("bookmaker"))
+            for odds_column in ("home_odds", "draw_odds", "away_odds"):
+                prefix = odds_column.replace("_odds", "")
+                if not self.optional_int(row.get(f"{prefix}_outliers_excluded")):
+                    continue
+                raw_best_odds = self.optional_float(
+                    row.get(f"{prefix}_raw_best_odds")
+                )
+                raw_best_bookmaker = str(
+                    row.get(f"{prefix}_raw_best_bookmaker")
+                )
+                odds = self.optional_float(row.get(odds_column))
+                if (
+                    odds is not None
+                    and raw_best_odds is not None
+                    and bookmaker == raw_best_bookmaker
+                    and abs(odds - raw_best_odds) < 0.0001
+                ):
+                    suspicious.add((event_key, bookmaker, odds_column))
+        return suspicious
 
     def filter_result_teams(self, _event=None):
         if self.result_search_after_id is not None:
