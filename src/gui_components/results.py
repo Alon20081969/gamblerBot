@@ -236,6 +236,12 @@ class ResultsMixin:
     def create_opportunity_card(self, rank, row):
         value_score = row.get("value_score")
         score = float(value_score) if pd.notna(value_score) else 0.0
+        confidence = str(row.get("consensus_confidence") or "Low")
+        confidence_color = {
+            "High": self.COLORS["success"],
+            "Medium": self.COLORS["warning"],
+            "Low": self.COLORS["danger"],
+        }.get(confidence, self.COLORS["muted"])
         color = (
             self.COLORS["success"] if score >= 5
             else self.COLORS["warning"] if score >= 0
@@ -258,7 +264,7 @@ class ResultsMixin:
             font=ctk.CTkFont(size=18, weight="bold"),
             width=52,
         )
-        rank_label.grid(row=0, column=0, rowspan=2, padx=(12, 4), pady=12)
+        rank_label.grid(row=0, column=0, rowspan=3, padx=(12, 4), pady=12)
         self.make_opportunity_card_clickable(rank_label, row)
         title_label = ctk.CTkLabel(
             card,
@@ -285,6 +291,19 @@ class ResultsMixin:
         )
         detail_label.grid(row=1, column=1, sticky="ew", padx=8, pady=(0, 12))
         self.make_opportunity_card_clickable(detail_label, row)
+        explanation_label = ctk.CTkLabel(
+            card,
+            text=self.opportunity_explanation(row),
+            text_color=self.COLORS["text"],
+            font=ctk.CTkFont(size=11),
+            anchor="w",
+            justify="left",
+            wraplength=900,
+        )
+        explanation_label.grid(
+            row=2, column=1, sticky="ew", padx=8, pady=(0, 12)
+        )
+        self.make_opportunity_card_clickable(explanation_label, row)
         score_label = ctk.CTkLabel(
             card,
             text=f"Value\n{score:+.2f}%",
@@ -293,8 +312,40 @@ class ResultsMixin:
             justify="center",
             width=86,
         )
-        score_label.grid(row=0, column=2, rowspan=2, padx=12, pady=12)
+        score_label.grid(row=0, column=2, rowspan=2, padx=12, pady=(12, 2))
         self.make_opportunity_card_clickable(score_label, row)
+        confidence_label = ctk.CTkLabel(
+            card,
+            text=f"{confidence}\nconfidence",
+            text_color=confidence_color,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            justify="center",
+            width=86,
+        )
+        confidence_label.grid(row=2, column=2, padx=12, pady=(2, 12))
+        self.make_opportunity_card_clickable(confidence_label, row)
+
+    def opportunity_explanation(self, row):
+        value = row.get("value_score")
+        fair_odds = row.get("consensus_fair_odds")
+        bookmaker_count = int(row.get("consensus_bookmakers") or 0)
+        probability_range = row.get("consensus_probability_range_pct")
+        confidence = str(row.get("consensus_confidence") or "Low")
+
+        if pd.isna(value) or pd.isna(fair_odds):
+            return (
+                "Why: there is not enough complete bookmaker data to calculate "
+                "a reliable consensus value."
+            )
+
+        position = "above" if float(value) >= 0 else "below"
+        return (
+            f"Why: the offered {float(row['best_odds']):.2f} price is "
+            f"{abs(float(value)):.2f}% {position} the fair {float(fair_odds):.2f} "
+            f"price. {confidence} confidence uses {bookmaker_count} complete "
+            f"bookmakers whose estimates span "
+            f"{self.format_metric(probability_range, ' percentage points')}."
+        )
 
     def capture_odds_movements(self, df):
         """Compare this scan with prior prices from the same session."""
@@ -512,11 +563,13 @@ class ResultsMixin:
         score = highest.get(f"{prefix}_opportunity_score")
         value_score = highest.get(f"{prefix}_value_score")
         fair_odds = highest.get(f"{prefix}_consensus_fair_odds")
+        confidence = highest.get(f"{prefix}_consensus_confidence")
         return (
             f"Implied chance: {self.format_metric(implied, '%')}   |   "
             f"Bookmaker spread: {self.format_metric(spread, '%')}   |   "
             f"Fair odds: {self.format_metric(fair_odds)}   |   "
             f"Consensus value: {self.format_metric(value_score, '%')}   |   "
+            f"Confidence: {confidence or 'Low'}   |   "
             f"Price disagreement: {self.format_metric(score)}"
         )
 

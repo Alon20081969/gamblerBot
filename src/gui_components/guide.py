@@ -127,6 +127,40 @@ class GuideMixin:
                 "more informative than one based on only 2."
             ),
         },
+        {
+            "title": "Confidence rating",
+            "summary": (
+                "A High, Medium, or Low label describing how stable the consensus "
+                "estimate is. It measures data support, not the chance of winning."
+            ),
+            "example": (
+                "High: at least 6 complete bookmakers and no more than a 5 percentage-"
+                "point estimate range. Medium: at least 3 bookmakers and no more than "
+                "10 points. All other cases are Low."
+            ),
+        },
+        {
+            "title": "Probability estimate range",
+            "summary": (
+                "The distance between the highest and lowest margin-free probability "
+                "estimates supplied by bookmakers for the same outcome."
+            ),
+            "example": (
+                "Example: bookmaker estimates of 22%, 24%, and 27% have a 5 "
+                "percentage-point range. A smaller range means stronger agreement."
+            ),
+        },
+        {
+            "title": "Why this opportunity?",
+            "summary": (
+                "The explanation below each Best card connecting its offered odds, "
+                "fair odds, value, bookmaker count, and confidence rating."
+            ),
+            "example": (
+                "Example: '5.00 is 25% above fair odds 4.00; Medium confidence from "
+                "4 bookmakers whose estimates span 6 percentage points.'"
+            ),
+        },
     )
 
     def build_guide_tab(self):

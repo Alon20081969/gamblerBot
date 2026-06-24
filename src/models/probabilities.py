@@ -69,15 +69,23 @@ class MarketAnalyzer:
 
     @classmethod
     def consensus_probabilities(cls, game_df):
+        """Return margin-free consensus probabilities and bookmaker count."""
+        consensus, count, _ = cls.consensus_analysis(game_df)
+        return consensus, count
+
+    @classmethod
+    def consensus_analysis(cls, game_df):
         """
-        Estimate fair outcome probabilities from the bookmaker market.
+        Estimate fair probabilities and how tightly bookmakers agree.
 
         Each bookmaker's implied probabilities are normalized first, removing
         its margin (vig). The median normalized probability is then taken for
         each outcome and normalized once more so the final market sums to 100%.
+        The range records the gap between the highest and lowest bookmaker
+        probability estimate for each outcome, in percentage points.
         """
         if game_df is None or game_df.empty:
-            return {}, 0
+            return {}, 0, {}
 
         active_columns = [
             column
@@ -85,7 +93,7 @@ class MarketAnalyzer:
             if column in game_df and game_df[column].notna().any()
         ]
         if len(active_columns) < 2:
-            return {}, 0
+            return {}, 0, {}
 
         estimates = {column: [] for column in active_columns}
         complete_market_count = 0
@@ -105,7 +113,7 @@ class MarketAnalyzer:
                 estimates[column].append((1 / odds[column]) / implied_total)
 
         if not complete_market_count:
-            return {}, 0
+            return {}, 0, {}
 
         consensus = {
             column: float(pd.Series(values).median())
@@ -114,11 +122,41 @@ class MarketAnalyzer:
         }
         consensus_total = sum(consensus.values())
         if consensus_total <= 0:
-            return {}, 0
-        return {
+            return {}, 0, {}
+        normalized_consensus = {
             column: probability / consensus_total
             for column, probability in consensus.items()
-        }, complete_market_count
+        }
+        probability_ranges_pct = {
+            column: round((max(values) - min(values)) * 100, 2)
+            for column, values in estimates.items()
+            if values
+        }
+        return (
+            normalized_consensus,
+            complete_market_count,
+            probability_ranges_pct,
+        )
+
+    @staticmethod
+    def consensus_confidence(bookmaker_count, probability_range_pct):
+        """
+        Rate the stability of a consensus as High, Medium, or Low.
+
+        High requires at least 6 complete bookmakers with estimates no more
+        than 5 percentage points apart. Medium requires at least 3 bookmakers
+        with estimates no more than 10 points apart. Everything else is Low.
+        """
+        try:
+            count = int(bookmaker_count)
+            range_pct = float(probability_range_pct)
+        except (TypeError, ValueError):
+            return "Low"
+        if count >= 6 and range_pct <= 5:
+            return "High"
+        if count >= 3 and range_pct <= 10:
+            return "Medium"
+        return "Low"
 
     @staticmethod
     def value_edge_pct(best_odds, consensus_probability):
@@ -237,7 +275,11 @@ class MarketAnalyzer:
         records = []
         group_cols = ["event_id", "home_team", "away_team"]
         for (event_id, home, away), game_df in df.groupby(group_cols, dropna=False):
-            consensus, consensus_bookmakers = cls.consensus_probabilities(game_df)
+            (
+                consensus,
+                consensus_bookmakers,
+                probability_ranges_pct,
+            ) = cls.consensus_analysis(game_df)
             for odds_column in cls.ODDS_COLUMNS:
                 if odds_column not in game_df:
                     continue
@@ -258,6 +300,10 @@ class MarketAnalyzer:
                 )
                 value_score = cls.value_edge_pct(
                     best_odds, consensus_probability
+                )
+                probability_range_pct = probability_ranges_pct.get(odds_column)
+                confidence = cls.consensus_confidence(
+                    consensus_bookmakers, probability_range_pct
                 )
 
                 if odds_column == "home_odds":
@@ -286,6 +332,8 @@ class MarketAnalyzer:
                     ),
                     "consensus_fair_odds": fair_odds,
                     "consensus_bookmakers": consensus_bookmakers,
+                    "consensus_probability_range_pct": probability_range_pct,
+                    "consensus_confidence": confidence,
                     "value_score": value_score,
                     "spread_pct": cls.odds_spread_pct(best_odds, worst_odds),
                     "opportunity_score": cls.opportunity_score(
@@ -336,6 +384,12 @@ class MarketAnalyzer:
             )
             enriched.loc[mask, f"{prefix}_consensus_bookmakers"] = (
                 row["consensus_bookmakers"]
+            )
+            enriched.loc[mask, f"{prefix}_consensus_probability_range_pct"] = (
+                row["consensus_probability_range_pct"]
+            )
+            enriched.loc[mask, f"{prefix}_consensus_confidence"] = (
+                row["consensus_confidence"]
             )
             enriched.loc[mask, f"{prefix}_value_score"] = row["value_score"]
 
