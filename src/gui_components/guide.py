@@ -306,6 +306,38 @@ class GuideMixin:
                 "games when Winner's lower prices do not compensate for the risk."
             ),
         },
+        {
+            "title": "Kickoff time",
+            "summary": (
+                "The scheduled match date and hour converted from the provider's UTC "
+                "timestamp into Jerusalem local time."
+            ),
+            "example": (
+                "Example: 'Thu, 25 Jun 2026 at 22:00' is the local Israeli kickoff "
+                "time shown consistently in Results, Best, and Advisor."
+            ),
+        },
+        {
+            "title": "Closest and furthest match",
+            "summary": (
+                "Chronological sorting by kickoff. Closest puts the next scheduled "
+                "game first; furthest puts the latest scheduled game first."
+            ),
+            "example": (
+                "Games with missing kickoff data are kept after games with valid dates "
+                "instead of being mixed into the chronological list."
+            ),
+        },
+        {
+            "title": "Date search",
+            "summary": (
+                "A team-or-date filter available in Results, Best, and Advisor."
+            ),
+            "example": (
+                "Search using formats such as 2026-06-25, 25/06, 25 Jun, June, "
+                "22:00, or a team name."
+            ),
+        },
     )
 
     def build_guide_tab(self):

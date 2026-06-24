@@ -25,7 +25,7 @@ class ResultsMixin:
         self.results_title.pack(side="left")
         self.result_search_entry = ctk.CTkEntry(
             header,
-            placeholder_text="Search teams...",
+            placeholder_text="Search team or date...",
             width=250,
             height=34,
             fg_color=self.COLORS["panel_alt"],
@@ -80,6 +80,18 @@ class ResultsMixin:
             text_color=self.COLORS["text"],
         )
         self.best_title.pack(side="left")
+        self.best_search_entry = ctk.CTkEntry(
+            header,
+            placeholder_text="Search team or date...",
+            width=190,
+            height=34,
+            fg_color=self.COLORS["panel_alt"],
+            border_color=self.COLORS["border_light"],
+        )
+        self.best_search_entry.pack(side="right", padx=(8, 0))
+        self.best_search_entry.bind(
+            "<KeyRelease>", lambda _event: self.rerender_best_opportunities()
+        )
         ctk.CTkButton(
             header,
             text="Open Results",
@@ -91,7 +103,12 @@ class ResultsMixin:
         ).pack(side="right")
         self.best_sort_dropdown = ctk.CTkComboBox(
             header,
-            values=["Highest value first", "Lowest value first"],
+            values=[
+                "Highest value first",
+                "Lowest value first",
+                "Closest match first",
+                "Furthest match first",
+            ],
             state="readonly",
             width=180,
             height=34,
@@ -178,23 +195,52 @@ class ResultsMixin:
                 "No opportunity data is available for this scan."
             )
             return
-        sort_lowest_first = (
-            hasattr(self, "best_sort_dropdown")
-            and self.best_sort_dropdown.get() == "Lowest value first"
+        query = self.best_search_entry.get().strip().casefold()
+        if query:
+            search_text = opportunities.apply(
+                lambda row: self.opportunity_search_text(row).casefold(),
+                axis=1,
+            )
+            opportunities = opportunities[search_text.str.contains(
+                query, regex=False, na=False
+            )]
+        sort_mode = self.best_sort_dropdown.get()
+        opportunities["_kickoff"] = pd.to_datetime(
+            opportunities["commence_time"], errors="coerce", utc=True
         )
-        opportunities = opportunities.sort_values(
-            ["value_score", "opportunity_score", "spread_pct"],
-            ascending=[
-                sort_lowest_first,
-                sort_lowest_first,
-                sort_lowest_first,
-            ],
-            na_position="last",
-        )
-        direction = "lowest first" if sort_lowest_first else "highest first"
+        if sort_mode == "Lowest value first":
+            opportunities = opportunities.sort_values(
+                ["value_score", "opportunity_score", "spread_pct"],
+                ascending=True,
+                na_position="last",
+            )
+        elif sort_mode == "Closest match first":
+            opportunities = opportunities.sort_values(
+                "_kickoff", ascending=True, na_position="last"
+            )
+        elif sort_mode == "Furthest match first":
+            opportunities = opportunities.sort_values(
+                "_kickoff", ascending=False, na_position="last"
+            )
+        else:
+            opportunities = opportunities.sort_values(
+                ["value_score", "opportunity_score", "spread_pct"],
+                ascending=False,
+                na_position="last",
+            )
+        direction = sort_mode.casefold()
         self.best_title.configure(
             text=f"Best value opportunities - {len(opportunities)} shown ({direction})"
         )
+        if opportunities.empty:
+            ctk.CTkLabel(
+                self.best_results,
+                text=(
+                    f'No Best-tab games match "{self.best_search_entry.get().strip()}".'
+                ),
+                text_color=self.COLORS["muted"],
+            ).grid(row=0, column=0, sticky="ew", padx=20, pady=30)
+            return
         for rank, (_, row) in enumerate(opportunities.iterrows(), start=1):
             self.create_opportunity_card(rank, row)
 
@@ -258,6 +304,7 @@ class ResultsMixin:
         title_label.grid(row=0, column=1, sticky="ew", padx=8, pady=(12, 2))
         self.make_opportunity_card_clickable(title_label, row)
         detail = (
+            f"Kickoff {self.format_jerusalem_time(row.get('commence_time'))}   |   "
             f"{row['outcome']} @ {row['best_odds']:.2f} at {row['best_bookmaker']}   |   "
             f"Fair odds {self.format_metric(row.get('consensus_fair_odds'))}   |   "
             f"Consensus chance "
@@ -311,6 +358,19 @@ class ResultsMixin:
         )
         confidence_label.grid(row=2, column=2, padx=12, pady=(2, 12))
         self.make_opportunity_card_clickable(confidence_label, row)
+
+    def opportunity_search_text(self, row):
+        kickoff = pd.to_datetime(row.get("commence_time"), errors="coerce", utc=True)
+        date_forms = ""
+        if pd.notna(kickoff):
+            local = kickoff.tz_convert("Asia/Jerusalem")
+            date_forms = local.strftime(
+                "%Y-%m-%d %d/%m/%Y %d/%m %d %b %B %H:%M"
+            )
+        return (
+            f"{row.get('match', '')} {row.get('selection', '')} "
+            f"{row.get('outcome', '')} {date_forms}"
+        )
 
     def opportunity_explanation(self, row):
         value = row.get("value_score")
@@ -471,11 +531,23 @@ class ResultsMixin:
         if self.latest_results_df is None:
             return
         query = self.result_search_entry.get().strip()
-        data = self.latest_results_df
+        data = self.latest_results_df.copy()
         if query:
             home = data['home_team'].astype(str).str.contains(query, case=False, regex=False, na=False)
             away = data['away_team'].astype(str).str.contains(query, case=False, regex=False, na=False)
-            data = data[home | away]
+            kickoff_text = pd.to_datetime(
+                data["commence_time"], errors="coerce", utc=True
+            ).dt.tz_convert("Asia/Jerusalem").dt.strftime(
+                "%Y-%m-%d %d/%m/%Y %d/%m %d %b %B %H:%M"
+            )
+            date_match = kickoff_text.str.contains(
+                query, case=False, regex=False, na=False
+            )
+            data = data[home | away | date_match]
+        data["_kickoff"] = pd.to_datetime(
+            data["commence_time"], errors="coerce", utc=True
+        )
+        data = data.sort_values("_kickoff", ascending=True, na_position="last")
         self.results_generation += 1
         generation = self.results_generation
         for widget in self.game_results.winfo_children():

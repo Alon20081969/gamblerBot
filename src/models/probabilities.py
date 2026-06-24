@@ -348,6 +348,7 @@ class MarketAnalyzer:
                     "event_id": event_id,
                     "home_team": home,
                     "away_team": away,
+                    "commence_time": highest.get("commence_time"),
                     "match": f"{home} vs {away}",
                     "selection": selection,
                     "outcome": cls.outcome_label(odds_column),

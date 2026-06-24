@@ -34,6 +34,28 @@ class AdvisorMixin:
             fg_color=self.COLORS["panel_alt"],
             hover_color=self.COLORS["border_light"],
         ).grid(row=0, column=1, padx=(8, 0))
+        self.advisor_date_search = ctk.CTkEntry(
+            header,
+            placeholder_text="Search team or date...",
+            width=190,
+            height=32,
+            fg_color=self.COLORS["panel_alt"],
+            border_color=self.COLORS["border_light"],
+        )
+        self.advisor_date_search.grid(row=0, column=2, padx=(8, 0))
+        self.advisor_date_search.bind(
+            "<KeyRelease>", lambda _event: self.apply_advisor_filters()
+        )
+        self.advisor_date_sort = ctk.CTkComboBox(
+            header,
+            values=["Closest match first", "Furthest match first"],
+            state="readonly",
+            width=165,
+            height=32,
+            command=lambda _value: self.apply_advisor_filters(),
+        )
+        self.advisor_date_sort.set("Closest match first")
+        self.advisor_date_sort.grid(row=0, column=3, padx=(8, 0))
 
         self.advisor_status = ctk.CTkLabel(
             self.advisor_tab,
@@ -145,6 +167,7 @@ class AdvisorMixin:
         self.advisor_controls = []
         for position, (_, candidate) in enumerate(candidates.iterrows(), start=1):
             self.create_advisor_card(position, candidate)
+        self.apply_advisor_filters()
         self.start_winner_auto_sync()
 
     def create_advisor_card(self, position, candidate):
@@ -167,13 +190,14 @@ class AdvisorMixin:
         card.grid(row=position - 1, column=0, sticky="ew", padx=8, pady=7)
         card.grid_columnconfigure(1, weight=1)
 
-        ctk.CTkLabel(
+        rank_label = ctk.CTkLabel(
             card,
             text=f"#{position}",
             width=48,
             text_color=risk_color,
             font=ctk.CTkFont(size=18, weight="bold"),
-        ).grid(row=0, column=0, rowspan=3, padx=(12, 4), pady=12)
+        )
+        rank_label.grid(row=0, column=0, rowspan=3, padx=(12, 4), pady=12)
 
         ctk.CTkLabel(
             card,
@@ -186,7 +210,8 @@ class AdvisorMixin:
         ctk.CTkLabel(
             card,
             text=(
-                f"Consensus chance {chance:.2f}%  •  Fair odds "
+                f"Kickoff {self.format_jerusalem_time(candidate.get('commence_time'))}"
+                f"  •  Consensus chance {chance:.2f}%  •  Fair odds "
                 f"{float(candidate['consensus_fair_odds']):.2f}  •  "
                 f"{confidence} confidence  •  "
                 f"{int(candidate['consensus_bookmakers'])} bookmakers"
@@ -274,6 +299,7 @@ class AdvisorMixin:
                 "button": add_button,
                 "source_label": source_label,
                 "card": card,
+                "rank_label": rank_label,
                 "matched": None,
                 "winner_value": None,
                 "price_source": None,
@@ -481,7 +507,8 @@ class AdvisorMixin:
         favorable_only = self.advisor_favorable_only.get()
         confidence_filter = self.advisor_confidence_filter.get()
         risk_filter = self.advisor_risk_filter.get()
-        shown = 0
+        query = self.advisor_date_search.get().strip().casefold()
+        visible_controls = []
 
         for control in self.advisor_controls:
             candidate = control["candidate"]
@@ -509,22 +536,67 @@ class AdvisorMixin:
                 and risk not in {"Lower", "Moderate"}
             ):
                 visible = False
+            if query and query not in self.advisor_candidate_search_text(
+                candidate
+            ).casefold():
+                visible = False
 
             if visible:
-                control["card"].grid()
-                shown += 1
+                visible_controls.append(control)
             else:
                 control["card"].grid_remove()
+
+        reverse = self.advisor_date_sort.get() == "Furthest match first"
+        visible_controls.sort(
+            key=lambda control: self.advisor_kickoff_sort_key(
+                control["candidate"], reverse
+            ),
+            reverse=reverse,
+        )
+        for position, control in enumerate(visible_controls, start=1):
+            control["rank_label"].configure(text=f"#{position}")
+            control["card"].grid(
+                row=position - 1,
+                column=0,
+                sticky="ew",
+                padx=8,
+                pady=7,
+            )
 
         matched_count = sum(
             control.get("matched") is True for control in self.advisor_controls
         )
         self.advisor_filter_status.configure(
             text=(
-                f"{shown} shown • {matched_count} Winner matched • "
+                f"{len(visible_controls)} shown • {matched_count} Winner matched • "
                 f"{len(self.advisor_controls)} scanned"
             )
         )
+
+    def advisor_candidate_search_text(self, candidate):
+        kickoff = pd.to_datetime(
+            candidate.get("commence_time"), errors="coerce", utc=True
+        )
+        date_forms = ""
+        if pd.notna(kickoff):
+            local = kickoff.tz_convert("Asia/Jerusalem")
+            date_forms = local.strftime(
+                "%Y-%m-%d %d/%m/%Y %d/%m %d %b %B %H:%M"
+            )
+        return (
+            f"{candidate.get('match', '')} {candidate.get('selection', '')} "
+            f"{date_forms}"
+        )
+
+    @staticmethod
+    def advisor_kickoff_sort_key(candidate, furthest_first=False):
+        kickoff = pd.to_datetime(
+            candidate.get("commence_time"), errors="coerce", utc=True
+        )
+        if pd.isna(kickoff):
+            fallback = "1900-01-01" if furthest_first else "2200-01-01"
+            return pd.Timestamp(fallback, tz="UTC")
+        return kickoff
 
     def add_winner_candidate_to_slip(
         self, candidate, winner_odds, value, source="manual"
