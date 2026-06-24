@@ -298,8 +298,15 @@ class HistoryExportMixin:
             self.history_status.configure(text=f"History export failed: {exc}")
 
     def export_gamble_slip_csv(self):
+        self.selected_bets = {
+            event_key: bet
+            for event_key, bet in self.selected_bets.items()
+            if str(bet.get("bookmaker", "")).startswith("Winner")
+        }
         if not self.selected_bets:
-            self.saved_slip_status.configure(text="No Gamble-slip selections to export.")
+            self.saved_slip_status.configure(
+                text="No Winner selections are available to export."
+            )
             return
         rows = [
             {

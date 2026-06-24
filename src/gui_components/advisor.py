@@ -12,7 +12,7 @@ class AdvisorMixin:
     """Explain lower-risk market candidates and evaluate manual Winner prices."""
 
     def build_advisor_tab(self):
-        self.advisor_tab.grid_rowconfigure(2, weight=1)
+        self.advisor_tab.grid_rowconfigure(3, weight=1)
         self.advisor_tab.grid_columnconfigure(0, weight=1)
 
         header = ctk.CTkFrame(self.advisor_tab, fg_color="transparent")
@@ -49,6 +49,54 @@ class AdvisorMixin:
         )
         self.advisor_status.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 8))
 
+        filters = ctk.CTkFrame(
+            self.advisor_tab,
+            fg_color=self.COLORS["panel_soft"],
+            corner_radius=10,
+            border_width=1,
+            border_color=self.COLORS["border"],
+        )
+        filters.grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 8))
+        self.advisor_matched_only = ctk.BooleanVar(value=True)
+        self.advisor_favorable_only = ctk.BooleanVar(value=False)
+        ctk.CTkSwitch(
+            filters,
+            text="Matched Winner games only",
+            variable=self.advisor_matched_only,
+            command=self.apply_advisor_filters,
+        ).pack(side="left", padx=(12, 10), pady=9)
+        ctk.CTkSwitch(
+            filters,
+            text="Favorable Winner price only",
+            variable=self.advisor_favorable_only,
+            command=self.apply_advisor_filters,
+        ).pack(side="left", padx=10, pady=9)
+        self.advisor_confidence_filter = ctk.CTkComboBox(
+            filters,
+            values=["All confidence", "High only", "Medium + High"],
+            state="readonly",
+            width=145,
+            command=lambda _value: self.apply_advisor_filters(),
+        )
+        self.advisor_confidence_filter.set("All confidence")
+        self.advisor_confidence_filter.pack(side="left", padx=10, pady=9)
+        self.advisor_risk_filter = ctk.CTkComboBox(
+            filters,
+            values=["All risk", "Lower only", "Lower + Moderate"],
+            state="readonly",
+            width=145,
+            command=lambda _value: self.apply_advisor_filters(),
+        )
+        self.advisor_risk_filter.set("All risk")
+        self.advisor_risk_filter.pack(side="left", padx=10, pady=9)
+        self.advisor_filter_status = ctk.CTkLabel(
+            filters,
+            text="Waiting for scan",
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=10, weight="bold"),
+        )
+        self.advisor_filter_status.pack(side="right", padx=12, pady=9)
+
         self.advisor_results = ctk.CTkScrollableFrame(
             self.advisor_tab,
             fg_color=self.COLORS["panel_soft"],
@@ -56,7 +104,7 @@ class AdvisorMixin:
             border_width=1,
             border_color=self.COLORS["border"],
         )
-        self.advisor_results.grid(row=2, column=0, sticky="nsew", padx=4, pady=(0, 4))
+        self.advisor_results.grid(row=3, column=0, sticky="nsew", padx=4, pady=(0, 4))
         self.advisor_results.grid_columnconfigure(0, weight=1)
         self.advisor_controls = []
         self.winner_sync_generation = 0
@@ -81,6 +129,7 @@ class AdvisorMixin:
 
         candidates = MarketAnalyzer.advisor_candidates(df)
         if candidates.empty:
+            self.advisor_controls = []
             self.show_advisor_message(
                 "There is not enough complete bookmaker data for suggestions."
             )
@@ -183,6 +232,15 @@ class AdvisorMixin:
             font=ctk.CTkFont(size=10, weight="bold"),
         )
         verdict.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(5, 0))
+        source_label = ctk.CTkLabel(
+            controls,
+            text="Waiting for Winner sync",
+            width=180,
+            anchor="w",
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=9),
+        )
+        source_label.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(2, 0))
         add_button = ctk.CTkButton(
             controls,
             text="Evaluate",
@@ -198,12 +256,27 @@ class AdvisorMixin:
                 candidate, odds_entry, verdict, add_button
             ),
         )
+        odds_entry.bind(
+            "<KeyRelease>",
+            lambda _event: self.mark_winner_entry_edited(
+                candidate,
+                odds_entry,
+                verdict,
+                add_button,
+                source_label,
+            ),
+        )
         self.advisor_controls.append(
             {
                 "candidate": candidate.copy(),
                 "entry": odds_entry,
                 "verdict": verdict,
                 "button": add_button,
+                "source_label": source_label,
+                "card": card,
+                "matched": None,
+                "winner_value": None,
+                "price_source": None,
             }
         )
 
@@ -245,7 +318,7 @@ class AdvisorMixin:
                     if match
                     else None
                 )
-                matches.append((control, winner_odd, score))
+                matches.append((control, winner_odd, score, match))
         self.post_to_ui(
             self._apply_winner_sync,
             generation,
@@ -257,11 +330,31 @@ class AdvisorMixin:
         if generation != self.winner_sync_generation:
             return
         populated = 0
-        for control, winner_odd, _score in matches:
+        for control in self.advisor_controls:
+            if control.get("price_source") == "manual":
+                continue
+            control["matched"] = False
+            control["winner_value"] = None
+            control["source_label"].configure(
+                text="No confident Winner match",
+                text_color=self.COLORS["muted"],
+            )
+        for control, winner_odd, score, winner_match in matches:
             entry = control["entry"]
             try:
                 if not entry.winfo_exists() or winner_odd is None:
                     continue
+                if control.get("price_source") == "manual":
+                    continue
+                control["matched"] = True
+                control["price_source"] = "auto"
+                control["source_label"].configure(
+                    text=(
+                        f"Matched {winner_match.home_team} - "
+                        f"{winner_match.away_team} ({score:.0%})"
+                    ),
+                    text_color=self.COLORS["success"],
+                )
                 entry.delete(0, "end")
                 entry.insert(0, f"{float(winner_odd):.2f}")
                 self.evaluate_winner_candidate(
@@ -288,7 +381,15 @@ class AdvisorMixin:
         else:
             status = f" • Winner synced {populated}/{len(self.advisor_controls)}"
             color = self.COLORS["success"] if populated else self.COLORS["warning"]
-            if not populated:
+            if populated:
+                self.advisor_status.configure(
+                    text=(
+                        f"{populated} Winner games matched and evaluated. "
+                        "Winner's lower prices often produce negative value, so "
+                        "Favorable-only may correctly show few or zero games."
+                    )
+                )
+            else:
                 self.advisor_status.configure(
                     text=(
                         f"Winner returned {len(result.matches)} listings, but none "
@@ -297,6 +398,36 @@ class AdvisorMixin:
                 )
         if hasattr(self, "winner_sync_label"):
             self.winner_sync_label.configure(text=status, text_color=color)
+        self.apply_advisor_filters()
+
+    def mark_winner_entry_edited(
+        self, candidate, odds_entry, verdict, button, source_label
+    ):
+        verdict.configure(
+            text="Manual Winner price • press Evaluate",
+            text_color=self.COLORS["muted"],
+        )
+        source_label.configure(
+            text="Winner price edited manually",
+            text_color=self.COLORS["warning"],
+        )
+        for control in self.advisor_controls:
+            if control["entry"] is odds_entry:
+                control["matched"] = True
+                control["winner_value"] = None
+                control["price_source"] = "manual"
+                break
+        button.configure(
+            text="Evaluate",
+            command=lambda: self.evaluate_winner_candidate(
+                candidate,
+                odds_entry,
+                verdict,
+                button,
+                source="manual",
+            ),
+        )
+        self.apply_advisor_filters()
 
     def evaluate_winner_candidate(
         self, candidate, odds_entry, verdict, button, source="manual"
@@ -324,11 +455,75 @@ class AdvisorMixin:
             label = f"Poor price • {value:+.2f}% value"
             color = self.COLORS["danger"]
         verdict.configure(text=label, text_color=color)
+        for control in self.advisor_controls:
+            if control["entry"] is odds_entry:
+                control["winner_value"] = float(value)
+                control["price_source"] = source
+                if source == "manual":
+                    control["matched"] = True
+                    control["source_label"].configure(
+                        text="Winner price entered manually",
+                        text_color=self.COLORS["warning"],
+                    )
+                break
         button.configure(
             text="Add to slip",
             command=lambda: self.add_winner_candidate_to_slip(
                 candidate, winner_odds, value, source
             ),
+        )
+        self.apply_advisor_filters()
+
+    def apply_advisor_filters(self):
+        if not hasattr(self, "advisor_controls"):
+            return
+        matched_only = self.advisor_matched_only.get()
+        favorable_only = self.advisor_favorable_only.get()
+        confidence_filter = self.advisor_confidence_filter.get()
+        risk_filter = self.advisor_risk_filter.get()
+        shown = 0
+
+        for control in self.advisor_controls:
+            candidate = control["candidate"]
+            matched = control.get("matched")
+            value = control.get("winner_value")
+            confidence = str(candidate.get("consensus_confidence") or "Low")
+            risk = str(candidate.get("risk_level") or "High")
+
+            visible = True
+            if matched is not None and matched_only and not matched:
+                visible = False
+            if favorable_only and (value is None or value < 3):
+                visible = False
+            if confidence_filter == "High only" and confidence != "High":
+                visible = False
+            if (
+                confidence_filter == "Medium + High"
+                and confidence not in {"Medium", "High"}
+            ):
+                visible = False
+            if risk_filter == "Lower only" and risk != "Lower":
+                visible = False
+            if (
+                risk_filter == "Lower + Moderate"
+                and risk not in {"Lower", "Moderate"}
+            ):
+                visible = False
+
+            if visible:
+                control["card"].grid()
+                shown += 1
+            else:
+                control["card"].grid_remove()
+
+        matched_count = sum(
+            control.get("matched") is True for control in self.advisor_controls
+        )
+        self.advisor_filter_status.configure(
+            text=(
+                f"{shown} shown • {matched_count} Winner matched • "
+                f"{len(self.advisor_controls)} scanned"
+            )
         )
 
     def add_winner_candidate_to_slip(

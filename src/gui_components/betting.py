@@ -142,6 +142,7 @@ class BettingMixin:
                     not isinstance(bet, dict)
                     or not isinstance(bet.get("identity"), list)
                     or len(bet["identity"]) != 3
+                    or not str(bet.get("bookmaker", "")).startswith("Winner")
                 ):
                     continue
                 try:
@@ -204,12 +205,20 @@ class BettingMixin:
         if not name:
             self.saved_slip_status.configure(text="Enter a name for the slip.")
             return
-        if not self.selected_bets:
-            self.saved_slip_status.configure(text="Add at least one selection before saving.")
+        winner_bets = {
+            event_key: bet
+            for event_key, bet in self.selected_bets.items()
+            if self.is_winner_bet(bet)
+        }
+        self.selected_bets = winner_bets
+        if not winner_bets:
+            self.saved_slip_status.configure(
+                text="Add at least one Winner selection before saving."
+            )
             return
         bets = [
             {**bet, "identity": tuple(bet["identity"])}
-            for bet in self.selected_bets.values()
+            for bet in winner_bets.values()
         ]
         existed = name in self.saved_slips
         self.saved_slips[name] = {"stake": self.stake_entry.get().strip(), "bets": bets}
@@ -293,33 +302,23 @@ class BettingMixin:
             border_color=self.COLORS["border"],
         )
         frame.grid(row=3, column=0, sticky="ew", padx=12, pady=(0, 9))
-        frame.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(frame, text="Custom odd:", font=ctk.CTkFont(size=11, weight="bold")).grid(
-            row=0, column=0, padx=(10, 5), pady=8
-        )
-        options = [f"Home — {home}"] + (["Draw"] if has_draw else []) + [f"Away — {away}"]
-        selection = ctk.CTkComboBox(frame, values=options, state="readonly", width=170)
-        selection.set(options[0])
-        selection.grid(row=0, column=1, sticky="ew", padx=5, pady=8)
-        odds_entry = ctk.CTkEntry(frame, placeholder_text="Decimal odd", width=95)
-        odds_entry.grid(row=0, column=2, padx=5, pady=8)
-        feedback = ctk.CTkLabel(frame, text="", width=18, text_color=("#a13a3a", "#ef8585"))
-        feedback.grid(row=0, column=4, padx=(3, 8), pady=8)
-        ctk.CTkButton(
-            frame, text="Add to slip", width=82,
-            command=lambda: self.add_custom_odd(
-                event_key, home, away, selection.get(), odds_entry.get(), feedback
+        frame.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            frame,
+            text=(
+                "Reference market only — use Advisor for synced or manual "
+                "Winner prices."
             ),
-        ).grid(row=0, column=3, padx=5, pady=8)
-        self.custom_odd_controls[event_key] = {
-            "feedback": feedback, "entry": odds_entry, "selection": selection
-        }
-        existing = self.selected_bets.get(event_key)
-        if existing and existing.get("bookmaker") == "Custom odd":
-            if existing["selection"] in options:
-                selection.set(existing["selection"])
-            odds_entry.insert(0, f"{existing['odds']:g}")
-            self.set_custom_odd_status(event_key, True)
+            anchor="w",
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=11, weight="bold"),
+        ).grid(row=0, column=0, sticky="ew", padx=10, pady=8)
+        ctk.CTkButton(
+            frame,
+            text="Open Winner Advisor",
+            width=140,
+            command=lambda: self.show_page("Advisor"),
+        ).grid(row=0, column=1, padx=10, pady=8)
 
     def add_custom_odd(self, event_key, home, away, selection, odds_text, feedback):
         try:
@@ -329,10 +328,10 @@ class BettingMixin:
         except (ValueError, AttributeError):
             feedback.configure(text="Enter an odd above 1.00")
             return
-        identity = (event_key, "Custom odd", f"{selection}:{odds:.8g}")
+        identity = (event_key, "Winner (manual)", f"{selection}:{odds:.8g}")
         self.selected_bets[event_key] = {
             "identity": identity, "match": f"{home} vs {away}",
-            "selection": selection, "bookmaker": "Custom odd", "odds": odds,
+            "selection": selection, "bookmaker": "Winner (manual)", "odds": odds,
         }
         self.update_odds_button_styles(event_key)
         self.render_bet_slip()
@@ -402,13 +401,10 @@ class BettingMixin:
             border_width=1,
             corner_radius=8,
             fg_color=self.COLORS["panel_soft"],
-            hover_color=self.COLORS["accent"],
+            hover_color=self.COLORS["panel_alt"],
             border_color=self.COLORS["border_light"],
-            text_color=self.COLORS["text"],
-            command=lambda: self.toggle_bet(
-                identity, event_key, match, selection, bookmaker, odds,
-                analytics,
-            ),
+            text_color=self.COLORS["muted"],
+            command=lambda: self.show_page("Advisor"),
         )
         self.odds_buttons.setdefault(identity, []).append((button, display_text, movement))
         self.update_odds_button_style(identity)
@@ -416,18 +412,18 @@ class BettingMixin:
 
     def toggle_bet(self, identity, event_key, match, selection, bookmaker, odds,
                    analytics=None):
-        current = self.selected_bets.get(event_key)
-        if current and current["identity"] == identity:
-            del self.selected_bets[event_key]
-        else:
-            self.selected_bets[event_key] = {
-                "identity": identity, "match": match, "selection": selection,
-                "bookmaker": bookmaker, "odds": odds,
-                **(analytics or {}),
-            }
-        self.set_custom_odd_status(event_key, False)
-        self.update_odds_button_styles(event_key)
-        self.render_bet_slip()
+        self.show_page("Advisor")
+        if hasattr(self, "advisor_status"):
+            self.advisor_status.configure(
+                text=(
+                    "Global bookmaker prices are references only. Choose the "
+                    "matching Winner price here."
+                )
+            )
+
+    @staticmethod
+    def is_winner_bet(bet):
+        return str(bet.get("bookmaker", "")).startswith("Winner")
 
     def update_odds_button_style(self, identity):
         selected = any(bet["identity"] == identity for bet in self.selected_bets.values())
@@ -457,13 +453,19 @@ class BettingMixin:
                 self.update_odds_button_style(identity)
 
     def render_bet_slip(self):
+        self.selected_bets = {
+            event_key: bet
+            for event_key, bet in self.selected_bets.items()
+            if self.is_winner_bet(bet)
+        }
         for widget in self.bet_slip_results.winfo_children():
             widget.destroy()
         count = len(self.selected_bets)
         self.slip_title.configure(text=f"Gamble slip  •  {count} selection{'s' if count != 1 else ''}")
         if not self.selected_bets:
             ctk.CTkLabel(
-                self.bet_slip_results, text="Click any odds button to add a selection.",
+                self.bet_slip_results,
+                text="Add a synced or manually entered Winner price from Advisor.",
                 text_color=("gray40", "gray65"),
             ).grid(row=0, column=0, sticky="ew", padx=20, pady=30)
             self.update_bet_totals()
@@ -516,6 +518,11 @@ class BettingMixin:
             "Winner (manual)",
             "Winner (auto)",
         }:
+            if bet.get("bookmaker") == "Winner (auto)":
+                return (
+                    "Winner price • synced from Winner's public API",
+                    self.COLORS["success"],
+                )
             source = (
                 "Winner price"
                 if str(bet.get("bookmaker", "")).startswith("Winner")

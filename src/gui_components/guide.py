@@ -284,6 +284,28 @@ class GuideMixin:
                 "A price is inserted only when both teams pass the confidence threshold."
             ),
         },
+        {
+            "title": "Reference bookmaker odds",
+            "summary": (
+                "Global bookmaker prices shown in Results and Best to estimate the "
+                "market. They cannot be added to the actionable slip."
+            ),
+            "example": (
+                "A global price of 1.90 can help calculate fair value, but the slip "
+                "must use the actual Winner price you can place in Israel."
+            ),
+        },
+        {
+            "title": "Winner-only shortlist",
+            "summary": (
+                "The actionable Advisor list containing Winner-synced or manually "
+                "entered prices, with filters for matching, value, confidence, and risk."
+            ),
+            "example": (
+                "Matched-only is enabled by default. Favorable-only may show zero "
+                "games when Winner's lower prices do not compensate for the risk."
+            ),
+        },
     )
 
     def build_guide_tab(self):

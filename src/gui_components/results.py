@@ -199,43 +199,14 @@ class ResultsMixin:
             self.create_opportunity_card(rank, row)
 
     def add_opportunity_to_slip(self, row):
-        match = str(row.get("match", "Unknown match"))
-        event_id = row.get("event_id")
-        event_key = str(event_id) if pd.notna(event_id) else match.replace(" vs ", "|")
-        bookmaker = str(row.get("best_bookmaker", "Unknown bookmaker"))
-        odds_column = str(row.get("odds_column", "best_odds"))
-        identity = (event_key, bookmaker, odds_column)
-
-        try:
-            odds = float(row.get("best_odds"))
-        except (TypeError, ValueError):
-            self.write_to_terminal("[!] Could not add leaderboard pick: missing odds.")
-            return
-
-        self.selected_bets[event_key] = {
-            "identity": identity,
-            "match": match,
-            "selection": str(row.get("selection", row.get("outcome", "Selection"))),
-            "bookmaker": bookmaker,
-            "odds": odds,
-            "fair_odds": self.optional_float(row.get("consensus_fair_odds")),
-            "consensus_value": self.optional_float(row.get("value_score")),
-            "confidence": str(row.get("consensus_confidence") or "Low"),
-            "consensus_bookmakers": self.optional_int(
-                row.get("consensus_bookmakers")
-            ),
-            "outliers_excluded": self.optional_int(
-                row.get("outliers_excluded")
-            ) or 0,
-        }
-        self.set_custom_odd_status(event_key, False)
-        self.update_odds_button_styles(event_key)
-        self.render_bet_slip()
-        if hasattr(self, "saved_slip_status"):
-            self.saved_slip_status.configure(
-                text=f"Added from Best: {match} - {row.get('selection')} @ {odds:.2f}"
+        self.show_page("Advisor")
+        if hasattr(self, "advisor_status"):
+            self.advisor_status.configure(
+                text=(
+                    f"{row.get('match')} is a global-market reference. "
+                    "Only its Winner price can be added to the slip."
+                )
             )
-        self.show_page("Bet Slip")
 
     def make_opportunity_card_clickable(self, widget, row):
         try:
