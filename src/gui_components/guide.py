@@ -561,35 +561,77 @@ class GuideMixin:
             text_color=self.COLORS["muted"],
             font=ctk.CTkFont(size=11),
         ).grid(row=1, column=0, sticky="ew", pady=(3, 0))
+        self.guide_search_entry = ctk.CTkEntry(
+            header,
+            placeholder_text="Search terms, formulas, or examples...",
+            width=310,
+            height=34,
+            fg_color=self.COLORS["panel_alt"],
+            border_color=self.COLORS["border_light"],
+        )
+        self.guide_search_entry.grid(
+            row=0,
+            column=1,
+            rowspan=2,
+            sticky="e",
+            padx=(12, 8),
+        )
+        self.guide_search_entry.bind(
+            "<KeyRelease>",
+            lambda _event: self.filter_guide_terms(),
+        )
+        self.guide_search_status = ctk.CTkLabel(
+            header,
+            text=f"{len(self.GUIDE_TERMS)} terms",
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=10, weight="bold"),
+        )
+        self.guide_search_status.grid(
+            row=0,
+            column=2,
+            rowspan=2,
+            sticky="e",
+        )
 
-        guide = ctk.CTkScrollableFrame(
+        self.guide_scroll = ctk.CTkScrollableFrame(
             self.guide_tab,
             fg_color=self.COLORS["panel_soft"],
             corner_radius=12,
             border_width=1,
             border_color=self.COLORS["border"],
         )
-        guide.grid(row=1, column=0, sticky="nsew", padx=4, pady=(0, 4))
-        guide.grid_columnconfigure((0, 1), weight=1, uniform="guide")
+        self.guide_scroll.grid(
+            row=1, column=0, sticky="nsew", padx=4, pady=(0, 4)
+        )
+        self.guide_scroll.grid_columnconfigure(
+            (0, 1), weight=1, uniform="guide"
+        )
 
-        warning = ctk.CTkFrame(
-            guide,
+        self.guide_warning = ctk.CTkFrame(
+            self.guide_scroll,
             fg_color=self.COLORS["panel_alt"],
             corner_radius=10,
             border_width=1,
             border_color=self.COLORS["warning"],
         )
-        warning.grid(row=0, column=0, columnspan=2, sticky="ew", padx=8, pady=(8, 10))
-        warning.grid_columnconfigure(0, weight=1)
+        self.guide_warning.grid(
+            row=0,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            padx=8,
+            pady=(8, 10),
+        )
+        self.guide_warning.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
-            warning,
+            self.guide_warning,
             text="Important: value measures price, not certainty",
             anchor="w",
             text_color=self.COLORS["warning"],
             font=ctk.CTkFont(size=13, weight="bold"),
         ).grid(row=0, column=0, sticky="ew", padx=14, pady=(10, 2))
         ctk.CTkLabel(
-            warning,
+            self.guide_warning,
             text=(
                 "A +25% value selection can still lose. The number says the available "
                 "payout is favorable relative to the market estimate, not that the "
@@ -602,10 +644,58 @@ class GuideMixin:
             font=ctk.CTkFont(size=11),
         ).grid(row=1, column=0, sticky="ew", padx=14, pady=(2, 10))
 
+        self.guide_cards = []
         for index, term in enumerate(self.GUIDE_TERMS):
             row = (index // 2) + 1
             column = index % 2
-            self._create_guide_card(guide, row, column, term)
+            card = self._create_guide_card(
+                self.guide_scroll, row, column, term
+            )
+            self.guide_cards.append((card, term))
+
+        self.guide_no_results = ctk.CTkLabel(
+            self.guide_scroll,
+            text="No guide terms match that search.",
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=12, weight="bold"),
+        )
+
+    def filter_guide_terms(self):
+        query = self.guide_search_entry.get().strip().casefold()
+        visible = []
+        for card, term in self.guide_cards:
+            searchable = " ".join(
+                str(term.get(field, ""))
+                for field in ("title", "summary", "formula", "example")
+            ).casefold()
+            if not query or query in searchable:
+                visible.append((card, term))
+            else:
+                card.grid_remove()
+
+        for index, (card, _term) in enumerate(visible):
+            card.grid(
+                row=(index // 2) + 1,
+                column=index % 2,
+                sticky="nsew",
+                padx=8,
+                pady=7,
+            )
+
+        self.guide_search_status.configure(
+            text=f"{len(visible)} of {len(self.GUIDE_TERMS)} terms"
+        )
+        if visible:
+            self.guide_no_results.grid_remove()
+        else:
+            self.guide_no_results.grid(
+                row=1,
+                column=0,
+                columnspan=2,
+                sticky="ew",
+                padx=20,
+                pady=35,
+            )
 
     def _create_guide_card(self, parent, row, column, term):
         card = ctk.CTkFrame(
@@ -664,3 +754,4 @@ class GuideMixin:
             padx=14,
             pady=(2, 12),
         )
+        return card
