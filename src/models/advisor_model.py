@@ -123,6 +123,276 @@ class EloAdvisorModel:
             + cls.ELO_WEIGHT * elo
         )
 
+    @classmethod
+    def probabilities_from_ratings(
+        cls,
+        home_rating,
+        away_rating,
+        games_used=0,
+    ):
+        decisive_home = cls.expected_score(
+            float(home_rating) + cls.HOME_ADVANTAGE,
+            float(away_rating),
+        )
+        rating_gap = abs(
+            (float(home_rating) + cls.HOME_ADVANTAGE)
+            - float(away_rating)
+        )
+        draw_probability = max(0.16, min(0.28, 0.28 - rating_gap / 2000))
+        return EloEstimate(
+            home_rating=round(float(home_rating), 1),
+            away_rating=round(float(away_rating), 1),
+            home_probability=(1 - draw_probability) * decisive_home,
+            draw_probability=draw_probability,
+            away_probability=(1 - draw_probability) * (1 - decisive_home),
+            games_used=int(games_used),
+        )
+
+
+class PersistentEloStore:
+    """Persist unique completed matches and rebuild global ratings chronologically."""
+
+    def __init__(self, path=PREDICTIONS_DB):
+        self.path = Path(path)
+        self.ensure_schema()
+
+    def connect(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        return sqlite3.connect(self.path, timeout=10)
+
+    def ensure_schema(self):
+        with closing(self.connect()) as connection:
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS elo_matches (
+                    game_id TEXT PRIMARY KEY,
+                    start_time TEXT NOT NULL,
+                    competition TEXT,
+                    home_team_id TEXT NOT NULL,
+                    home_team_name TEXT NOT NULL,
+                    away_team_id TEXT NOT NULL,
+                    away_team_name TEXT NOT NULL,
+                    home_score REAL NOT NULL,
+                    away_score REAL NOT NULL,
+                    importance_weight REAL NOT NULL
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS elo_ratings (
+                    team_id TEXT PRIMARY KEY,
+                    team_name TEXT NOT NULL,
+                    rating REAL NOT NULL,
+                    games_played INTEGER NOT NULL,
+                    last_match_time TEXT
+                )
+            """)
+            connection.commit()
+
+    def ingest_games(self, games):
+        rows = []
+        for game in games or ():
+            row = self.game_row(game)
+            if row:
+                rows.append(row)
+        if not rows:
+            return 0
+        with closing(self.connect()) as connection:
+            before = connection.total_changes
+            connection.executemany(
+                """
+                INSERT OR IGNORE INTO elo_matches (
+                    game_id, start_time, competition,
+                    home_team_id, home_team_name,
+                    away_team_id, away_team_name,
+                    home_score, away_score, importance_weight
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+            added = connection.total_changes - before
+            connection.commit()
+        if added:
+            self.rebuild_ratings()
+        return int(added)
+
+    @classmethod
+    def game_row(cls, game):
+        if not isinstance(game, dict) or game.get("id") is None:
+            return None
+        try:
+            if int(game.get("statusGroup", 4)) != 4:
+                return None
+        except (TypeError, ValueError):
+            return None
+        home = game.get("homeCompetitor") or {}
+        away = game.get("awayCompetitor") or {}
+        if (
+            home.get("id") is None
+            or away.get("id") is None
+            or not game.get("startTime")
+        ):
+            return None
+        try:
+            home_score = float(home.get("score"))
+            away_score = float(away.get("score"))
+        except (TypeError, ValueError):
+            return None
+        competition = str(game.get("competitionDisplayName") or "")
+        return (
+            str(game["id"]),
+            str(game["startTime"]),
+            competition,
+            str(home["id"]),
+            str(home.get("name") or home["id"]),
+            str(away["id"]),
+            str(away.get("name") or away["id"]),
+            home_score,
+            away_score,
+            cls.importance_weight(competition),
+        )
+
+    @staticmethod
+    def importance_weight(competition):
+        name = str(competition or "").casefold()
+        if "friendly" in name:
+            return 0.55
+        if "world cup" in name and "qualif" not in name:
+            return 1.15
+        if "qualif" in name:
+            return 0.90
+        return 1.0
+
+    def rebuild_ratings(self):
+        with closing(self.connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT start_time, home_team_id, home_team_name,
+                       away_team_id, away_team_name,
+                       home_score, away_score, importance_weight
+                FROM elo_matches
+                ORDER BY start_time ASC, game_id ASC
+                """
+            ).fetchall()
+            ratings = {}
+            games_played = {}
+            names = {}
+            last_played = {}
+            for (
+                start_time,
+                home_id,
+                home_name,
+                away_id,
+                away_name,
+                home_score,
+                away_score,
+                importance,
+            ) in rows:
+                home_rating = self.regress_for_inactivity(
+                    ratings.get(home_id, EloAdvisorModel.BASE_RATING),
+                    last_played.get(home_id),
+                    start_time,
+                )
+                away_rating = self.regress_for_inactivity(
+                    ratings.get(away_id, EloAdvisorModel.BASE_RATING),
+                    last_played.get(away_id),
+                    start_time,
+                )
+                expected_home = EloAdvisorModel.expected_score(
+                    home_rating + EloAdvisorModel.HOME_ADVANTAGE,
+                    away_rating,
+                )
+                actual_home = (
+                    1.0 if home_score > away_score
+                    else 0.0 if home_score < away_score
+                    else 0.5
+                )
+                goal_multiplier = 1.0 + 0.25 * math.log1p(
+                    abs(home_score - away_score)
+                )
+                change = (
+                    EloAdvisorModel.K_FACTOR
+                    * float(importance)
+                    * goal_multiplier
+                    * (actual_home - expected_home)
+                )
+                ratings[home_id] = home_rating + change
+                ratings[away_id] = away_rating - change
+                games_played[home_id] = games_played.get(home_id, 0) + 1
+                games_played[away_id] = games_played.get(away_id, 0) + 1
+                names[home_id], names[away_id] = home_name, away_name
+                last_played[home_id] = last_played[away_id] = start_time
+
+            connection.execute("DELETE FROM elo_ratings")
+            connection.executemany(
+                """
+                INSERT INTO elo_ratings (
+                    team_id, team_name, rating, games_played, last_match_time
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        team_id,
+                        names[team_id],
+                        rating,
+                        games_played[team_id],
+                        last_played[team_id],
+                    )
+                    for team_id, rating in ratings.items()
+                ],
+            )
+            connection.commit()
+
+    @staticmethod
+    def regress_for_inactivity(rating, previous_time, current_time):
+        if not previous_time:
+            return float(rating)
+        try:
+            previous = datetime.fromisoformat(
+                str(previous_time).replace("Z", "+00:00")
+            )
+            current = datetime.fromisoformat(
+                str(current_time).replace("Z", "+00:00")
+            )
+            days = max(0.0, (current - previous).total_seconds() / 86400)
+        except (TypeError, ValueError):
+            return float(rating)
+        retention = 0.5 ** (days / 730)
+        return (
+            EloAdvisorModel.BASE_RATING
+            + (float(rating) - EloAdvisorModel.BASE_RATING) * retention
+        )
+
+    def estimate(self, home_team_id, away_team_id):
+        with closing(self.connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT team_id, rating, games_played
+                FROM elo_ratings
+                WHERE team_id IN (?, ?)
+                """,
+                (str(home_team_id), str(away_team_id)),
+            ).fetchall()
+            match_count = connection.execute(
+                "SELECT COUNT(*) FROM elo_matches"
+            ).fetchone()[0]
+        ratings = {
+            str(team_id): (float(rating), int(games_played))
+            for team_id, rating, games_played in rows
+        }
+        home = ratings.get(
+            str(home_team_id),
+            (EloAdvisorModel.BASE_RATING, 0),
+        )
+        away = ratings.get(
+            str(away_team_id),
+            (EloAdvisorModel.BASE_RATING, 0),
+        )
+        estimate = EloAdvisorModel.probabilities_from_ratings(
+            home[0],
+            away[0],
+            games_used=match_count,
+        )
+        return estimate, home[1], away[1]
+
 
 class PredictionLedger:
     """Store pre-match Advisor estimates and settle them by 365Scores game ID."""
@@ -161,6 +431,21 @@ class PredictionLedger:
                     UNIQUE(scores365_game_id, odds_column)
                 )
             """)
+            existing_columns = {
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA table_info(advisor_predictions)"
+                ).fetchall()
+            }
+            for column, definition in (
+                ("raw_model_probability", "REAL"),
+                ("calibration_sample", "INTEGER"),
+            ):
+                if column not in existing_columns:
+                    connection.execute(
+                        f"ALTER TABLE advisor_predictions "
+                        f"ADD COLUMN {column} {definition}"
+                    )
             connection.commit()
 
     def record(self, prediction):
@@ -168,7 +453,8 @@ class PredictionLedger:
         fields = (
             "scores365_game_id", "event_id", "home_team", "away_team",
             "kickoff", "odds_column", "selection", "market_probability",
-            "elo_probability", "model_probability", "winner_odds",
+            "elo_probability", "raw_model_probability",
+            "model_probability", "calibration_sample", "winner_odds",
             "expected_value", "risk_label",
         )
         values = [prediction.get(field) for field in fields]
@@ -191,6 +477,31 @@ class PredictionLedger:
                 [now, *values],
             )
             connection.commit()
+
+    def calibrate_probability(self, raw_probability, minimum_sample=8):
+        raw = min(0.99, max(0.01, float(raw_probability)))
+        lower = math.floor(raw * 10) / 10
+        upper = min(1.000001, lower + 0.1)
+        with closing(self.connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(*), SUM(correct)
+                FROM advisor_predictions
+                WHERE settled_at IS NOT NULL
+                  AND raw_model_probability >= ?
+                  AND raw_model_probability < ?
+                """,
+                (lower, upper),
+            ).fetchone()
+        sample = int(row[0] or 0)
+        correct = int(row[1] or 0)
+        if sample < int(minimum_sample):
+            return raw, sample
+        prior_strength = 10
+        calibrated = (
+            correct + raw * prior_strength
+        ) / (sample + prior_strength)
+        return min(0.99, max(0.01, calibrated)), sample
 
     def pending_game_ids(self, limit=30):
         with closing(self.connect()) as connection:
@@ -267,10 +578,29 @@ class PredictionLedger:
                 FROM advisor_predictions
                 """
             ).fetchone()
+            settled_rows = connection.execute(
+                """
+                SELECT model_probability, correct
+                FROM advisor_predictions
+                WHERE settled_at IS NOT NULL
+                """
+            ).fetchall()
         total = int(row[0] or 0)
         settled = int(row[1] or 0)
         correct = int(row[2] or 0)
         priced = int(row[5] or 0)
+        log_loss = None
+        if settled_rows:
+            losses = []
+            for probability, actual in settled_rows:
+                probability = min(0.999999, max(0.000001, float(probability)))
+                losses.append(
+                    -(
+                        int(actual) * math.log(probability)
+                        + (1 - int(actual)) * math.log(1 - probability)
+                    )
+                )
+            log_loss = sum(losses) / len(losses)
         return {
             "total": total,
             "settled": settled,
@@ -286,4 +616,7 @@ class PredictionLedger:
                 round(float(row[4]), 2) if row[4] is not None else None
             ),
             "priced_predictions": priced,
+            "log_loss": (
+                round(log_loss, 4) if log_loss is not None else None
+            ),
         }

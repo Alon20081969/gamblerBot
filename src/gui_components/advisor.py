@@ -12,7 +12,11 @@ from src.ingestion.winner_fetcher import (
     match_winner_game,
     team_similarity,
 )
-from src.models.advisor_model import EloAdvisorModel, PredictionLedger
+from src.models.advisor_model import (
+    EloAdvisorModel,
+    PersistentEloStore,
+    PredictionLedger,
+)
 from src.models.form_analyzer import FormAnalyzer
 from src.models.probabilities import MarketAnalyzer
 
@@ -156,6 +160,7 @@ class AdvisorMixin:
         self.advisor_controls = []
         self.winner_sync_generation = 0
         self.prediction_ledger = PredictionLedger()
+        self.persistent_elo = PersistentEloStore()
         self.refresh_advisor_model_status()
         self.show_advisor_message("Scan a competition to generate suggestions.")
 
@@ -665,18 +670,32 @@ class AdvisorMixin:
 
     def _team_form_worker(self, generation, eligible):
         analyzer = FormAnalyzer()
+        fetched = []
+        historical_games = []
         for control, winner_match in eligible:
             if generation != self.winner_sync_generation:
                 return
             result = analyzer.fetch_match(winner_match.match_id)
+            fetched.append((control, result))
+            if result.home and result.away:
+                historical_games.extend(result.home.recent_games)
+                historical_games.extend(result.away.recent_games)
+        try:
+            added_matches = self.persistent_elo.ingest_games(historical_games)
+        except (OSError, sqlite3.Error):
+            added_matches = 0
+        for index, (control, result) in enumerate(fetched):
             self.post_to_ui(
                 self._apply_team_form,
                 generation,
                 control,
                 result,
+                added_matches if index == 0 else 0,
             )
 
-    def _apply_team_form(self, generation, control, result):
+    def _apply_team_form(
+        self, generation, control, result, added_matches=0
+    ):
         if generation != self.winner_sync_generation:
             return
         try:
@@ -700,15 +719,14 @@ class AdvisorMixin:
             return
 
         home_form, away_form = self.align_team_forms(candidate, result)
-        elo = EloAdvisorModel.estimate(
+        elo, home_elo_games, away_elo_games = self.persistent_elo.estimate(
             home_form.team_id,
             away_form.team_id,
-            (*home_form.recent_games, *away_form.recent_games),
         )
         elo_probability = elo.probability_for(odds_column)
         if elo_probability is None:
             return
-        model_chance = (
+        blended_chance = (
             EloAdvisorModel.blended_probability(
                 market_chance / 100,
                 elo_probability,
@@ -722,7 +740,7 @@ class AdvisorMixin:
             f"({''.join(away_form.results)})"
         )
         if odds_column == "draw_odds":
-            adjusted = model_chance
+            raw_adjusted = blended_chance
             differential = None
             penalty = 0.0
             has_alert = False
@@ -735,23 +753,32 @@ class AdvisorMixin:
                 suggested_form, opponent_form = home_form, away_form
             else:
                 suggested_form, opponent_form = away_form, home_form
-            adjusted, differential, penalty, has_alert = (
+            raw_adjusted, differential, penalty, has_alert = (
                 FormAnalyzer.adjusted_safety(
-                    model_chance,
+                    blended_chance,
                     suggested_form,
                     opponent_form,
                 )
             )
+        calibrated_probability, calibration_sample = (
+            self.prediction_ledger.calibrate_probability(
+                raw_adjusted / 100
+            )
+        )
+        adjusted = calibrated_probability * 100
         adjusted_risk = self.advisor_risk_from_chance(adjusted)
         control["adjusted_safety_chance"] = adjusted
         control["adjusted_risk"] = adjusted_risk
         control["form_differential"] = differential
         control["elo_probability"] = elo_probability
         control["model_probability"] = adjusted / 100
+        control["raw_model_probability"] = raw_adjusted / 100
+        control["calibration_sample"] = calibration_sample
         control["candidate"]["adjusted_safety_chance"] = adjusted
         control["candidate"]["adjusted_risk"] = adjusted_risk
         control["candidate"]["elo_probability_pct"] = elo_probability * 100
         control["candidate"]["model_probability_pct"] = adjusted
+        control["candidate"]["raw_model_probability_pct"] = raw_adjusted
         risk_color = self.advisor_risk_color(adjusted_risk)
         demoted = (
             str(candidate["risk_level"]) == "Lower"
@@ -763,9 +790,9 @@ class AdvisorMixin:
             else ""
         )
         penalty_text = (
-            f" • model chance {model_chance:.2f}% → {adjusted:.2f}%"
+            f" • blend {blended_chance:.2f}% → form {raw_adjusted:.2f}%"
             if penalty
-            else f" • model chance {adjusted:.2f}%"
+            else f" • blended chance {raw_adjusted:.2f}%"
         )
         if odds_column != "draw_odds":
             control["form_label"].configure(
@@ -779,10 +806,13 @@ class AdvisorMixin:
             )
         control["model_label"].configure(
             text=(
-                f"Experimental Elo {elo_probability * 100:.2f}% • "
+                f"Persistent Elo {elo_probability * 100:.2f}% "
+                f"({elo.home_rating:.0f}-{elo.away_rating:.0f}) • "
                 f"market {market_chance:.2f}% • "
-                f"80/20 blend {model_chance:.2f}% • "
-                f"{elo.games_used} historical games"
+                f"raw model {raw_adjusted:.2f}% • "
+                f"calibrated {adjusted:.2f}% "
+                f"(n={calibration_sample}) • "
+                f"{elo.games_used} stored matches"
             ),
             text_color=self.COLORS["accent_hover"],
         )
@@ -810,9 +840,17 @@ class AdvisorMixin:
             control,
             result,
             elo_probability,
+            raw_adjusted / 100,
             adjusted / 100,
+            calibration_sample,
             adjusted_risk,
         )
+        if added_matches:
+            self.write_to_terminal(
+                f"[+] Elo database learned {added_matches} new historical "
+                f"match(es); {home_form.team_name} has {home_elo_games} rated "
+                f"games and {away_form.team_name} has {away_elo_games}."
+            )
         self.apply_advisor_filters()
 
     def record_advisor_prediction(
@@ -820,7 +858,9 @@ class AdvisorMixin:
         control,
         result,
         elo_probability,
+        raw_model_probability,
         model_probability,
+        calibration_sample,
         risk_label,
     ):
         candidate = control["candidate"]
@@ -853,7 +893,9 @@ class AdvisorMixin:
                     float(candidate["consensus_probability_pct"]) / 100
                 ),
                 "elo_probability": float(elo_probability),
+                "raw_model_probability": float(raw_model_probability),
                 "model_probability": float(model_probability),
+                "calibration_sample": int(calibration_sample),
                 "winner_odds": winner_odds,
                 "expected_value": expected_value,
                 "risk_label": risk_label,
@@ -921,6 +963,7 @@ class AdvisorMixin:
                 f"Model history: {summary['correct']}/{summary['settled']} correct "
                 f"({summary['accuracy_pct']:.1f}%) • "
                 f"Brier {summary['brier_score']:.4f} • "
+                f"log loss {summary['log_loss']:.4f} • "
                 f"{summary['pending']} pending{profit_text}"
             ),
             text_color=self.COLORS["accent_hover"],

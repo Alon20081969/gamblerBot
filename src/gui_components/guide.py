@@ -480,14 +480,15 @@ class GuideMixin:
             ),
         },
         {
-            "title": "Experimental Elo probability",
+            "title": "Persistent Elo probability",
             "summary": (
-                "The home, draw, or away chance derived from the provisional Elo "
-                "ratings. It is shown separately because it is not yet calibrated."
+                "The home, draw, or away chance derived from ratings saved across "
+                "scans and app restarts."
             ),
             "example": (
-                "Elo 61% means the recent-result rating model assigns 61%, not that "
-                "the outcome is guaranteed or that Winner offers a good price."
+                "Each completed match ID is stored only once and replayed in date "
+                "order. Friendlies have less influence and inactive ratings slowly "
+                "move back toward the 1500 average."
             ),
         },
         {
@@ -500,6 +501,40 @@ class GuideMixin:
             "example": (
                 "Market 70% and Elo 60% produce a 68% blended chance. The heavier "
                 "market weight limits the effect of an immature Elo model."
+            ),
+        },
+        {
+            "title": "Probability calibration",
+            "summary": (
+                "A correction learned from earlier settled predictions with similar "
+                "raw model probabilities."
+            ),
+            "example": (
+                "If enough previous predictions around 70% won less often than 70%, "
+                "the displayed calibrated chance is reduced. No correction is applied "
+                "until at least eight comparable predictions have settled."
+            ),
+        },
+        {
+            "title": "Calibration sample (n)",
+            "summary": (
+                "The number of settled predictions in the same 10-percentage-point "
+                "probability band used by the calibrator."
+            ),
+            "example": (
+                "n=3 is displayed for transparency but is too small to change the "
+                "raw model. n=20 provides more evidence, though still not certainty."
+            ),
+        },
+        {
+            "title": "Chronological backtesting",
+            "summary": (
+                "Predictions are recorded before kickoff and settled only after the "
+                "fixture finishes, preventing the result from entering its own estimate."
+            ),
+            "example": (
+                "The first prediction for a fixture is preserved; rescanning does not "
+                "rewrite its original probability after the match."
             ),
         },
         {
@@ -523,6 +558,17 @@ class GuideMixin:
             "example": (
                 "Predicting 80% for an outcome that loses creates 0.64 error; "
                 "predicting 55% creates 0.3025. Use many settled games before judging."
+            ),
+        },
+        {
+            "title": "Log loss",
+            "summary": (
+                "A calibration metric that strongly penalizes confident wrong "
+                "predictions. Lower is better."
+            ),
+            "example": (
+                "A wrong 90% prediction is punished much more than a wrong 55% "
+                "prediction. This discourages false certainty."
             ),
         },
         {
