@@ -1,3 +1,4 @@
+import sqlite3
 import threading
 import tkinter
 from datetime import datetime, timezone
@@ -11,6 +12,7 @@ from src.ingestion.winner_fetcher import (
     match_winner_game,
     team_similarity,
 )
+from src.models.advisor_model import EloAdvisorModel, PredictionLedger
 from src.models.form_analyzer import FormAnalyzer
 from src.models.probabilities import MarketAnalyzer
 
@@ -65,6 +67,20 @@ class AdvisorMixin:
         )
         self.advisor_date_sort.set("Closest match first")
         self.advisor_date_sort.grid(row=0, column=3, padx=(8, 0))
+        self.advisor_model_status = ctk.CTkLabel(
+            header,
+            text="Model history: no evaluated predictions yet",
+            anchor="w",
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=10, weight="bold"),
+        )
+        self.advisor_model_status.grid(
+            row=1,
+            column=0,
+            columnspan=4,
+            sticky="ew",
+            pady=(5, 0),
+        )
 
         self.advisor_status = ctk.CTkLabel(
             self.advisor_tab,
@@ -139,6 +155,8 @@ class AdvisorMixin:
         self.advisor_results.grid_columnconfigure(0, weight=1)
         self.advisor_controls = []
         self.winner_sync_generation = 0
+        self.prediction_ledger = PredictionLedger()
+        self.refresh_advisor_model_status()
         self.show_advisor_message("Scan a competition to generate suggestions.")
 
     def show_advisor_message(self, message):
@@ -206,7 +224,7 @@ class AdvisorMixin:
             text_color=risk_color,
             font=ctk.CTkFont(size=18, weight="bold"),
         )
-        rank_label.grid(row=0, column=0, rowspan=4, padx=(12, 4), pady=12)
+        rank_label.grid(row=0, column=0, rowspan=5, padx=(12, 4), pady=12)
 
         ctk.CTkLabel(
             card,
@@ -251,8 +269,17 @@ class AdvisorMixin:
         )
         form_label.grid(row=3, column=1, sticky="ew", padx=8, pady=(2, 12))
 
+        model_label = ctk.CTkLabel(
+            card,
+            text="Elo model: waiting for recent match history...",
+            anchor="w",
+            text_color=self.COLORS["muted"],
+            font=ctk.CTkFont(size=10),
+        )
+        model_label.grid(row=4, column=1, sticky="ew", padx=8, pady=(0, 12))
+
         controls = ctk.CTkFrame(card, fg_color="transparent")
-        controls.grid(row=0, column=2, rowspan=4, padx=12, pady=10)
+        controls.grid(row=0, column=2, rowspan=5, padx=12, pady=10)
         ctk.CTkLabel(
             controls,
             text="Winner odd:",
@@ -342,7 +369,7 @@ class AdvisorMixin:
             border_color=self.COLORS["border"],
         )
         history_frame.grid(
-            row=4,
+            row=5,
             column=0,
             columnspan=3,
             sticky="ew",
@@ -390,6 +417,7 @@ class AdvisorMixin:
             "rank_label": rank_label,
             "risk_label": risk_label,
             "form_label": form_label,
+            "model_label": model_label,
             "matched": None,
             "winner_value": None,
             "price_source": None,
@@ -629,6 +657,11 @@ class AdvisorMixin:
             args=(generation, eligible),
             daemon=True,
         ).start()
+        threading.Thread(
+            target=self._prediction_settlement_worker,
+            args=(generation,),
+            daemon=True,
+        ).start()
 
     def _team_form_worker(self, generation, eligible):
         analyzer = FormAnalyzer()
@@ -653,16 +686,35 @@ class AdvisorMixin:
             return
 
         candidate = control["candidate"]
-        baseline = float(candidate["consensus_probability_pct"])
+        market_chance = float(candidate["consensus_probability_pct"])
         odds_column = str(candidate.get("odds_column"))
         if result.error or result.home is None or result.away is None:
             control["form_label"].configure(
                 text="Recent form unavailable - no safety adjustment applied",
                 text_color=self.COLORS["muted"],
             )
+            control["model_label"].configure(
+                text="Elo model unavailable - market consensus remains unchanged",
+                text_color=self.COLORS["muted"],
+            )
             return
 
         home_form, away_form = self.align_team_forms(candidate, result)
+        elo = EloAdvisorModel.estimate(
+            home_form.team_id,
+            away_form.team_id,
+            (*home_form.recent_games, *away_form.recent_games),
+        )
+        elo_probability = elo.probability_for(odds_column)
+        if elo_probability is None:
+            return
+        model_chance = (
+            EloAdvisorModel.blended_probability(
+                market_chance / 100,
+                elo_probability,
+            )
+            * 100
+        )
         form_summary = (
             f"{home_form.team_name} {home_form.score}/15 "
             f"({''.join(home_form.results)})  •  "
@@ -670,29 +722,36 @@ class AdvisorMixin:
             f"({''.join(away_form.results)})"
         )
         if odds_column == "draw_odds":
+            adjusted = model_chance
+            differential = None
+            penalty = 0.0
+            has_alert = False
             control["form_label"].configure(
                 text=f"Recent form: {form_summary} • draw receives no form penalty",
                 text_color=self.COLORS["muted"],
             )
-            return
-
-        if odds_column == "home_odds":
-            suggested_form, opponent_form = home_form, away_form
         else:
-            suggested_form, opponent_form = away_form, home_form
-        adjusted, differential, penalty, has_alert = (
-            FormAnalyzer.adjusted_safety(
-                baseline,
-                suggested_form,
-                opponent_form,
+            if odds_column == "home_odds":
+                suggested_form, opponent_form = home_form, away_form
+            else:
+                suggested_form, opponent_form = away_form, home_form
+            adjusted, differential, penalty, has_alert = (
+                FormAnalyzer.adjusted_safety(
+                    model_chance,
+                    suggested_form,
+                    opponent_form,
+                )
             )
-        )
         adjusted_risk = self.advisor_risk_from_chance(adjusted)
         control["adjusted_safety_chance"] = adjusted
         control["adjusted_risk"] = adjusted_risk
         control["form_differential"] = differential
+        control["elo_probability"] = elo_probability
+        control["model_probability"] = adjusted / 100
         control["candidate"]["adjusted_safety_chance"] = adjusted
         control["candidate"]["adjusted_risk"] = adjusted_risk
+        control["candidate"]["elo_probability_pct"] = elo_probability * 100
+        control["candidate"]["model_probability_pct"] = adjusted
         risk_color = self.advisor_risk_color(adjusted_risk)
         demoted = (
             str(candidate["risk_level"]) == "Lower"
@@ -704,29 +763,168 @@ class AdvisorMixin:
             else ""
         )
         penalty_text = (
-            f" • safety chance {baseline:.2f}% → {adjusted:.2f}%"
+            f" • model chance {model_chance:.2f}% → {adjusted:.2f}%"
             if penalty
-            else f" • safety chance stays {adjusted:.2f}%"
+            else f" • model chance {adjusted:.2f}%"
         )
-        control["form_label"].configure(
+        if odds_column != "draw_odds":
+            control["form_label"].configure(
+                text=(
+                    f"Recent form: {form_summary} • differential "
+                    f"{differential:+d}{penalty_text}{warning}"
+                ),
+                text_color=(
+                    self.COLORS["danger"] if has_alert else self.COLORS["muted"]
+                ),
+            )
+        control["model_label"].configure(
             text=(
-                f"Recent form: {form_summary} • differential "
-                f"{differential:+d}{penalty_text}{warning}"
+                f"Experimental Elo {elo_probability * 100:.2f}% • "
+                f"market {market_chance:.2f}% • "
+                f"80/20 blend {model_chance:.2f}% • "
+                f"{elo.games_used} historical games"
             ),
-            text_color=(
-                self.COLORS["danger"] if has_alert else self.COLORS["muted"]
-            ),
+            text_color=self.COLORS["accent_hover"],
         )
         control["risk_label"].configure(
             text=(
-                f"{adjusted_risk} relative risk after form review: "
-                "this outcome can still lose."
+                f"{adjusted_risk} relative risk after model review: "
+                f"estimated safety {adjusted:.2f}%. This can still lose."
                 f"{warning}"
             ),
             text_color=risk_color,
         )
         control["rank_label"].configure(text_color=risk_color)
+        try:
+            if float(control["entry"].get().strip()) > 1:
+                self.evaluate_winner_candidate(
+                    candidate,
+                    control["entry"],
+                    control["verdict"],
+                    control["button"],
+                    source=control.get("price_source") or "auto",
+                )
+        except (TypeError, ValueError, tkinter.TclError):
+            pass
+        self.record_advisor_prediction(
+            control,
+            result,
+            elo_probability,
+            adjusted / 100,
+            adjusted_risk,
+        )
         self.apply_advisor_filters()
+
+    def record_advisor_prediction(
+        self,
+        control,
+        result,
+        elo_probability,
+        model_probability,
+        risk_label,
+    ):
+        candidate = control["candidate"]
+        winner_odds = None
+        try:
+            winner_odds = float(control["entry"].get().strip())
+        except (TypeError, ValueError, tkinter.TclError):
+            pass
+        expected_value = (
+            round((winner_odds * model_probability - 1) * 100, 2)
+            if winner_odds and winner_odds > 1
+            else None
+        )
+        event_id = candidate.get("event_id")
+        event_id_text = str(event_id) if pd.notna(event_id) else ""
+        kickoff = candidate.get("commence_time")
+        kickoff_text = str(kickoff) if pd.notna(kickoff) else ""
+        try:
+            self.prediction_ledger.record({
+                "scores365_game_id": (
+                    result.game_id or control.get("winner_match_id")
+                ),
+                "event_id": event_id_text,
+                "home_team": str(candidate.get("home_team") or ""),
+                "away_team": str(candidate.get("away_team") or ""),
+                "kickoff": kickoff_text,
+                "odds_column": str(candidate.get("odds_column") or ""),
+                "selection": str(candidate.get("selection") or ""),
+                "market_probability": (
+                    float(candidate["consensus_probability_pct"]) / 100
+                ),
+                "elo_probability": float(elo_probability),
+                "model_probability": float(model_probability),
+                "winner_odds": winner_odds,
+                "expected_value": expected_value,
+                "risk_label": risk_label,
+            })
+            if result.status_group == 4:
+                self.prediction_ledger.settle_game(
+                    result.game_id,
+                    result.home_score,
+                    result.away_score,
+                )
+            self.refresh_advisor_model_status()
+        except (OSError, sqlite3.Error, ValueError, TypeError) as exc:
+            self.write_to_terminal(
+                f"[!] Prediction tracking unavailable: {exc}"
+            )
+
+    def _prediction_settlement_worker(self, generation):
+        analyzer = FormAnalyzer()
+        settled = 0
+        try:
+            pending_ids = self.prediction_ledger.pending_game_ids(limit=8)
+            for game_id in pending_ids:
+                if generation != self.winner_sync_generation:
+                    return
+                result = analyzer.fetch_match(game_id)
+                if result.status_group == 4:
+                    settled += self.prediction_ledger.settle_game(
+                        game_id,
+                        result.home_score,
+                        result.away_score,
+                    )
+        except (OSError, sqlite3.Error):
+            return
+        if settled:
+            self.post_to_ui(self.refresh_advisor_model_status)
+
+    def refresh_advisor_model_status(self):
+        if not hasattr(self, "advisor_model_status"):
+            return
+        try:
+            summary = self.prediction_ledger.summary()
+        except (OSError, sqlite3.Error):
+            self.advisor_model_status.configure(
+                text="Model history unavailable",
+                text_color=self.COLORS["danger"],
+            )
+            return
+        if not summary["settled"]:
+            self.advisor_model_status.configure(
+                text=(
+                    f"Model history: {summary['total']} recorded • "
+                    f"{summary['pending']} awaiting results"
+                ),
+                text_color=self.COLORS["muted"],
+            )
+            return
+        profit = summary["profit_units"]
+        profit_text = (
+            f" • flat-stake P/L {profit:+.2f}u"
+            if profit is not None
+            else ""
+        )
+        self.advisor_model_status.configure(
+            text=(
+                f"Model history: {summary['correct']}/{summary['settled']} correct "
+                f"({summary['accuracy_pct']:.1f}%) • "
+                f"Brier {summary['brier_score']:.4f} • "
+                f"{summary['pending']} pending{profit_text}"
+            ),
+            text_color=self.COLORS["accent_hover"],
+        )
 
     def align_team_forms(self, candidate, result):
         expected_home = str(candidate.get("home_team") or "")
@@ -1049,16 +1247,23 @@ class AdvisorMixin:
             )
             return
 
-        chance = float(candidate["consensus_probability_pct"]) / 100
+        model_probability_pct = candidate.get("model_probability_pct")
+        uses_model = model_probability_pct is not None
+        chance = float(
+            model_probability_pct
+            if uses_model
+            else candidate["consensus_probability_pct"]
+        ) / 100
         value = MarketAnalyzer.value_edge_pct(winner_odds, chance)
+        value_name = "model value" if uses_model else "consensus value"
         if value >= 3:
-            label = f"Favorable price • {value:+.2f}% value"
+            label = f"Favorable price • {value:+.2f}% {value_name}"
             color = self.COLORS["success"]
         elif value >= -3:
-            label = f"Roughly fair price • {value:+.2f}% value"
+            label = f"Roughly fair price • {value:+.2f}% {value_name}"
             color = self.COLORS["warning"]
         else:
-            label = f"Poor price • {value:+.2f}% value"
+            label = f"Poor price • {value:+.2f}% {value_name}"
             color = self.COLORS["danger"]
         verdict.configure(text=label, text_color=color)
         matched_control = None
@@ -1207,14 +1412,25 @@ class AdvisorMixin:
         odds_column = str(candidate["odds_column"])
         bookmaker = "Winner (auto)" if source == "auto" else "Winner (manual)"
         identity = (event_key, bookmaker, odds_column)
+        model_probability_pct = candidate.get("model_probability_pct")
+        fair_odds = (
+            100 / float(model_probability_pct)
+            if model_probability_pct
+            else float(candidate["consensus_fair_odds"])
+        )
         self.selected_bets[event_key] = {
             "identity": identity,
             "match": str(candidate["match"]),
             "selection": str(candidate["selection"]),
             "bookmaker": bookmaker,
             "odds": float(winner_odds),
-            "fair_odds": float(candidate["consensus_fair_odds"]),
+            "fair_odds": fair_odds,
             "consensus_value": float(value),
+            "market_probability_pct": float(
+                candidate["consensus_probability_pct"]
+            ),
+            "elo_probability_pct": candidate.get("elo_probability_pct"),
+            "model_probability_pct": model_probability_pct,
             "confidence": str(candidate["consensus_confidence"]),
             "consensus_bookmakers": int(candidate["consensus_bookmakers"]),
             "outliers_excluded": int(candidate.get("outliers_excluded") or 0),

@@ -468,6 +468,74 @@ class GuideMixin:
                 "chance remains visible for transparency."
             ),
         },
+        {
+            "title": "Elo rating",
+            "summary": (
+                "A running team-strength rating updated after historical results. "
+                "Beating stronger opponents raises a rating more than beating weaker ones."
+            ),
+            "example": (
+                "The Advisor starts unseen teams at 1500, includes home advantage, "
+                "and replays the recent scored games supplied by 365Scores."
+            ),
+        },
+        {
+            "title": "Experimental Elo probability",
+            "summary": (
+                "The home, draw, or away chance derived from the provisional Elo "
+                "ratings. It is shown separately because it is not yet calibrated."
+            ),
+            "example": (
+                "Elo 61% means the recent-result rating model assigns 61%, not that "
+                "the outcome is guaranteed or that Winner offers a good price."
+            ),
+        },
+        {
+            "title": "Blended model chance",
+            "summary": (
+                "A conservative estimate using 80% bookmaker consensus and 20% "
+                "experimental Elo before any poor-form penalty."
+            ),
+            "formula": "0.80 x market chance + 0.20 x Elo chance",
+            "example": (
+                "Market 70% and Elo 60% produce a 68% blended chance. The heavier "
+                "market weight limits the effect of an immature Elo model."
+            ),
+        },
+        {
+            "title": "Prediction ledger",
+            "summary": (
+                "A local SQLite record of each pre-match Advisor estimate, its Winner "
+                "price, and the eventual result."
+            ),
+            "example": (
+                "Predictions are keyed by the exact 365Scores fixture and outcome so "
+                "later scans can settle them without confusing repeated fixtures."
+            ),
+        },
+        {
+            "title": "Brier score",
+            "summary": (
+                "A probability-calibration error where lower is better. It penalizes "
+                "confident predictions that are wrong."
+            ),
+            "formula": "Average of (predicted probability - actual result)^2",
+            "example": (
+                "Predicting 80% for an outcome that loses creates 0.64 error; "
+                "predicting 55% creates 0.3025. Use many settled games before judging."
+            ),
+        },
+        {
+            "title": "Flat-stake model P/L",
+            "summary": (
+                "The hypothetical profit or loss from staking one unit on every "
+                "tracked selection at its recorded Winner price."
+            ),
+            "example": (
+                "It is a backtest diagnostic, not a promise. A small sample can be "
+                "strongly distorted by luck and high odds."
+            ),
+        },
     )
 
     def build_guide_tab(self):

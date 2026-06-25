@@ -17,6 +17,7 @@ class TeamForm:
     score: int
     results: tuple[str, ...]
     matches_count: int
+    recent_games: tuple[dict, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,10 @@ class MatchFormResult:
     error: str | None = None
     source: str = "365Scores"
     from_cache: bool = False
+    game_id: str | None = None
+    status_group: int | None = None
+    home_score: float | None = None
+    away_score: float | None = None
 
 
 class FormAnalyzer:
@@ -56,6 +61,10 @@ class FormAnalyzer:
                     result.error,
                     result.source,
                     True,
+                    result.game_id,
+                    result.status_group,
+                    result.home_score,
+                    result.away_score,
                 )
             wait_for = self.REQUEST_COOLDOWN_SECONDS - (
                 now - self.__class__._last_request_at
@@ -117,7 +126,22 @@ class FormAnalyzer:
                 away,
                 "365Scores did not provide enough recent team results.",
             )
-        return MatchFormResult(home, away)
+        return MatchFormResult(
+            home,
+            away,
+            game_id=(
+                str(game.get("id"))
+                if game.get("id") is not None
+                else None
+            ),
+            status_group=cls.safe_int(game.get("statusGroup")),
+            home_score=cls.safe_float(
+                (game.get("homeCompetitor") or {}).get("score")
+            ),
+            away_score=cls.safe_float(
+                (game.get("awayCompetitor") or {}).get("score")
+            ),
+        )
 
     @classmethod
     def score_team(cls, team_data):
@@ -155,7 +179,23 @@ class FormAnalyzer:
             score=score,
             results=tuple(results),
             matches_count=len(results),
+            recent_games=tuple(recent_games),
         )
+
+    @staticmethod
+    def safe_int(value):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def safe_float(value):
+        try:
+            parsed = float(value)
+            return parsed if parsed >= 0 else None
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def result_for_team(game, team_id):
